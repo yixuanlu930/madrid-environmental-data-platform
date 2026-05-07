@@ -1,0 +1,92 @@
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: madrid-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - madrid-data-net
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: madrid-minio-init
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-madrid-environment}
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
+      mc mb --ignore-existing local/$$MINIO_BUCKET;
+      mc anonymous set download local/$$MINIO_BUCKET || true;
+      exit 0;
+      "
+    networks:
+      - madrid-data-net
+
+  etl:
+    build: .
+    container_name: madrid-etl
+    env_file:
+      - .env
+    environment:
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_BUCKET: ${MINIO_BUCKET:-madrid-environment}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
+      MADRID_LATITUDE: ${MADRID_LATITUDE:-40.4168}
+      MADRID_LONGITUDE: ${MADRID_LONGITUDE:--3.7038}
+      TIMEZONE: ${TIMEZONE:-Europe/Madrid}
+      MADRID_AIR_CSV_URL: ${MADRID_AIR_CSV_URL:-https://datos.madrid.es/dataset/300755-0-calidad-aire-tiempo-real-acumula/resource/300755-0-calidad-aire-tiempo-real-acumula/download/300755-0-calidad-aire-tiempo-real-acumula.csv}
+      ETL_PORT: ${ETL_PORT:-8000}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - minio
+      - minio-init
+    networks:
+      - madrid-data-net
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: madrid-n8n
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      GENERIC_TIMEZONE: ${TIMEZONE:-Europe/Madrid}
+      TZ: ${TIMEZONE:-Europe/Madrid}
+      N8N_SECURE_COOKIE: "false"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows
+    depends_on:
+      - etl
+    networks:
+      - madrid-data-net
+    restart: unless-stopped
+
+volumes:
+  minio_data:
+  n8n_data:
+
+networks:
+  madrid-data-net:
+    driver: bridge

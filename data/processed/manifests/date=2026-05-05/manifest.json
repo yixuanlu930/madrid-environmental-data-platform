@@ -1,0 +1,32 @@
+{
+  "status": "success",
+  "date": "2026-05-05",
+  "sources": [
+    "open_meteo_historical_weather",
+    "datos_madrid_air_quality_accumulated"
+  ],
+  "outputs": [
+    "/app/data/raw/open_meteo/historical_weather/date=2026-05-05/weather.json",
+    "/app/data/raw/datos_madrid/air_quality_accumulated/date=2026-05-05/air_quality_accumulated.csv",
+    "/app/data/clean/open_meteo/historical_weather/date=2026-05-05/weather_hourly_clean.csv",
+    "/app/data/clean/datos_madrid/air_quality_accumulated/date=2026-05-05/air_quality_hourly_clean.csv",
+    "/app/data/processed/environment_observations/date=2026-05-05/environment_observations.csv",
+    "/app/data/curated/daily_environment_summary/date=2026-05-05/daily_environment_summary.csv"
+  ],
+  "uploaded_to_minio": [
+    "clean/datos_madrid/air_quality_accumulated/date=2026-05-05/air_quality_hourly_clean.csv",
+    "clean/open_meteo/historical_weather/date=2026-05-05/weather_hourly_clean.csv",
+    "processed/environment_observations/date=2026-05-05/environment_observations.csv",
+    "processed/manifests/date=2026-05-05/manifest.json",
+    "raw/datos_madrid/air_quality_accumulated/date=2026-05-05/air_quality_accumulated.csv",
+    "raw/open_meteo/historical_weather/date=2026-05-05/weather.json",
+    "curated/daily_environment_summary/date=2026-05-05/daily_environment_summary.csv"
+  ],
+  "errors": [],
+  "row_counts": {
+    "weather_clean": 120,
+    "madrid_air_quality_clean": 3024,
+    "processed_observations": 3144,
+    "curated_summary": 16
+  }
+}
