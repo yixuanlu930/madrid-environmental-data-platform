@@ -1,7 +1,7 @@
 {
   "id": "madrid_openmeteo_daily_pipeline",
   "name": "Madrid Environmental Daily Pipeline",
-  "active": false,
+  "active": true,
   "createdAt": "2026-05-07T09:05:17.621452+00:00",
   "updatedAt": "2026-05-07T09:05:17.621563+00:00",
   "versionId": "df19f559-8987-40d2-9104-d30ef18ca82e",
@@ -58,6 +58,66 @@
         -160,
         20
       ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "status-check",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "CheckStatus",
+      "name": "Pipeline OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        80,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "message": "=❌ Madrid ETL falló el {{ $now.toFormat('yyyy-MM-dd') }}.\nEstado: {{ $json.status }}\nErrores: {{ JSON.stringify($json.errors) }}",
+        "options": {}
+      },
+      "id": "LogError",
+      "name": "Log error",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        320,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "message": "=✅ Madrid ETL completado el {{ $now.toFormat('yyyy-MM-dd') }}.\nFilas curadas: {{ $json.row_counts.curated_hourly_wide }}",
+        "options": {}
+      },
+      "id": "LogSuccess",
+      "name": "Log success",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        320,
+        -80
+      ]
     }
   ],
   "connections": {
@@ -77,6 +137,35 @@
         [
           {
             "node": "Run ETL service",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run ETL service": {
+      "main": [
+        [
+          {
+            "node": "Pipeline OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pipeline OK?": {
+      "main": [
+        [
+          {
+            "node": "Log success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log error",
             "type": "main",
             "index": 0
           }

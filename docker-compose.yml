@@ -14,19 +14,25 @@ services:
     networks:
       - madrid-data-net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   minio-init:
     image: minio/mc:latest
     container_name: madrid-minio-init
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_BUCKET: ${MINIO_BUCKET:-madrid-openmeteo-environment}
     entrypoint: >
       /bin/sh -c "
-      sleep 5;
       mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
       mc mb --ignore-existing local/$$MINIO_BUCKET;
       mc anonymous set download local/$$MINIO_BUCKET || true;
@@ -63,8 +69,10 @@ services:
     volumes:
       - ./data:/app/data
     depends_on:
-      - minio
-      - minio-init
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     networks:
       - madrid-data-net
     restart: unless-stopped
@@ -89,6 +97,31 @@ services:
     networks:
       - madrid-data-net
     restart: unless-stopped
+
+  n8n-init:
+    image: n8nio/n8n:latest
+    container_name: madrid-n8n-init
+    entrypoint: >
+      /bin/sh -c "
+      sleep 10;
+      n8n import:workflow --input=/workflows/madrid_environment_daily.json &&
+      echo 'Workflow imported successfully';
+      exit 0;
+      "
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      GENERIC_TIMEZONE: ${TIMEZONE:-Europe/Madrid}
+      TZ: ${TIMEZONE:-Europe/Madrid}
+      N8N_SECURE_COOKIE: "false"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows
+    depends_on:
+      - n8n
+    networks:
+      - madrid-data-net
 
   jupyter:
     build: .
@@ -119,8 +152,10 @@ services:
       - ./data:/app/data
       - ./notebooks:/app/notebooks
     depends_on:
-      - minio
-      - etl
+      minio:
+        condition: service_healthy
+      etl:
+        condition: service_started
     networks:
       - madrid-data-net
     restart: unless-stopped
