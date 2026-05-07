@@ -23,7 +23,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      MINIO_BUCKET: ${MINIO_BUCKET:-madrid-environment}
+      MINIO_BUCKET: ${MINIO_BUCKET:-madrid-openmeteo-environment}
     entrypoint: >
       /bin/sh -c "
       sleep 5;
@@ -41,15 +41,22 @@ services:
     env_file:
       - .env
     environment:
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
-      MINIO_BUCKET: ${MINIO_BUCKET:-madrid-environment}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      MINIO_SECURE: ${MINIO_SECURE:-false}
       MADRID_LATITUDE: ${MADRID_LATITUDE:-40.4168}
       MADRID_LONGITUDE: ${MADRID_LONGITUDE:--3.7038}
       TIMEZONE: ${TIMEZONE:-Europe/Madrid}
-      MADRID_AIR_CSV_URL: ${MADRID_AIR_CSV_URL:-https://datos.madrid.es/dataset/300755-0-calidad-aire-tiempo-real-acumula/resource/300755-0-calidad-aire-tiempo-real-acumula/download/300755-0-calidad-aire-tiempo-real-acumula.csv}
+
+      HISTORICAL_WEATHER_URL: ${HISTORICAL_WEATHER_URL:-https://archive-api.open-meteo.com/v1/archive}
+      AIR_QUALITY_URL: ${AIR_QUALITY_URL:-https://air-quality-api.open-meteo.com/v1/air-quality}
+
+      WEATHER_HOURLY_VARIABLES: ${WEATHER_HOURLY_VARIABLES:-temperature_2m,precipitation}
+      AIR_QUALITY_HOURLY_VARIABLES: ${AIR_QUALITY_HOURLY_VARIABLES:-ozone,carbon_dioxide}
+
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_BUCKET: ${MINIO_BUCKET:-madrid-openmeteo-environment}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
+
       ETL_PORT: ${ETL_PORT:-8000}
     ports:
       - "8000:8000"
@@ -78,6 +85,41 @@ services:
       - n8n_data:/home/node/.n8n
       - ./n8n/workflows:/workflows
     depends_on:
+      - etl
+    networks:
+      - madrid-data-net
+    restart: unless-stopped
+
+  jupyter:
+    build: .
+    container_name: madrid-jupyter
+    command: >
+      jupyter lab
+      --ServerApp.ip=0.0.0.0
+      --ServerApp.port=8888
+      --ServerApp.allow_root=True
+      --ServerApp.open_browser=False
+      --ServerApp.root_dir=/app
+      --ServerApp.default_url=/lab/tree/notebooks
+      --ServerApp.token=''
+      --ServerApp.password=''
+      --IdentityProvider.token=''
+      --ServerApp.disable_check_xsrf=True
+    env_file:
+      - .env
+    environment:
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
+      MINIO_BUCKET: ${MINIO_BUCKET:-madrid-openmeteo-environment}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
+    ports:
+      - "8890:8888"
+    volumes:
+      - ./data:/app/data
+      - ./notebooks:/app/notebooks
+    depends_on:
+      - minio
       - etl
     networks:
       - madrid-data-net

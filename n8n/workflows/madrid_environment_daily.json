@@ -1,17 +1,14 @@
 {
+  "id": "madrid_openmeteo_daily_pipeline",
   "name": "Madrid Environmental Daily Pipeline",
+  "active": false,
+  "createdAt": "2026-05-07T09:05:17.621452+00:00",
+  "updatedAt": "2026-05-07T09:05:17.621563+00:00",
+  "versionId": "df19f559-8987-40d2-9104-d30ef18ca82e",
+  "triggerCount": 0,
+  "tags": [],
+  "isArchived": false,
   "nodes": [
-    {
-      "parameters": {},
-      "id": "ManualTrigger",
-      "name": "Manual Trigger",
-      "type": "n8n-nodes-base.manualTrigger",
-      "typeVersion": 1,
-      "position": [
-        -520,
-        120
-      ]
-    },
     {
       "parameters": {
         "rule": {
@@ -34,6 +31,17 @@
       ]
     },
     {
+      "parameters": {},
+      "id": "ManualTrigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        120
+      ]
+    },
+    {
       "parameters": {
         "method": "POST",
         "url": "http://etl:8000/run",
@@ -53,7 +61,7 @@
     }
   ],
   "connections": {
-    "Manual Trigger": {
+    "Daily Schedule 07:00": {
       "main": [
         [
           {
@@ -64,7 +72,7 @@
         ]
       ]
     },
-    "Daily Schedule 07:00": {
+    "Manual Trigger": {
       "main": [
         [
           {
@@ -83,13 +91,5 @@
   "meta": {
     "templateCredsSetupCompleted": true
   },
-  "pinData": {},
-  "id": "madrid_environment_daily_pipeline",
-  "active": false,
-  "createdAt": "2026-05-07T07:43:12.092032+00:00",
-  "updatedAt": "2026-05-07T07:43:12.092190+00:00",
-  "versionId": "c22b8ec6-c751-4852-916c-7445ff77c85c",
-  "triggerCount": 0,
-  "tags": [],
-  "isArchived": false
+  "pinData": {}
 }

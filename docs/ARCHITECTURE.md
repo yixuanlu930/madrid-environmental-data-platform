@@ -1,37 +1,56 @@
+
 # Arquitectura
 
+La infraestructura usa únicamente Open-Meteo como plataforma de datos abiertos, pero con dos APIs distintas:
+
+1. Historical Weather API.
+2. Air Quality API.
+
+Ambas consultas se realizan para Madrid:
+
+- latitude = 40.4168
+- longitude = -3.7038
+- timezone = Europe/Madrid
+
+## Flujo
+
 ```text
-Fuentes externas
-├── Open-Meteo Historical Weather API
-└── Portal de datos abiertos del Ayuntamiento de Madrid
-        │
-        ▼
-n8n ──HTTP──► ETL service Python
-        │          │
-        │          ├── RAW: datos originales
-        │          ├── CLEAN: datos tabulares por fuente
-        │          ├── PROCESSED: dataset unificado
-        │          └── CURATED: resumen diario para análisis
-        │
-        ▼
-MinIO / S3 compatible object storage
+n8n
+  │ POST http://etl:8000/run
+  ▼
+ETL Python
+  ├── llama a Historical Weather API
+  ├── llama a Air Quality API
+  ├── guarda RAW JSON
+  ├── transforma a CLEAN CSV
+  ├── genera PROCESSED long table
+  └── genera CURATED wide table + summary
+  ▼
+MinIO Data Lake
+  ▲
+  │
+Jupyter conectado a la misma red Docker
 ```
 
-## Decisión de diseño
+## Zonas del Data Lake
 
-La práctica se resuelve con un Data Lake por zonas:
+- `raw`: respuestas JSON originales de cada API.
+- `clean`: una tabla horaria limpia por API. Cada API devuelve 24 filas para el día anterior.
+- `processed`: tabla larga unificada con 96 observaciones: 24 horas × 4 variables.
+- `curated`: tabla ancha optimizada para análisis con 24 filas y columnas analíticas.
 
-- `raw`: conserva la respuesta original de las fuentes, sin pérdida.
-- `clean`: normaliza cada fuente a CSV tabular.
-- `processed`: integra observaciones ambientales de varias fuentes en un único esquema.
-- `curated`: genera tablas finales resumidas para análisis desde Python, notebooks o BI.
+## Variables
 
-La automatización se realiza con n8n. El workflow contiene:
-- un disparador manual para pruebas;
-- un disparador programado diario a las 07:00;
-- una petición HTTP al servicio ETL (`http://etl:8000/run`).
+Historical Weather API:
 
-Docker Compose garantiza:
-- persistencia mediante volúmenes (`minio_data`, `n8n_data`) y bind mount `./data`;
-- comunicación mediante la red `madrid-data-net`;
-- aislamiento mediante servicios separados (`minio`, `etl`, `n8n`).
+- `temperature_2m`
+- `precipitation`
+
+Air Quality API:
+
+- `ozone`
+- `carbon_dioxide`
+
+## Jupyter
+
+El servicio `jupyter` está en la misma red Docker que `minio` y `etl`, por lo que puede leer directamente del bucket `madrid-openmeteo-environment` usando el endpoint interno `minio:9000`.
