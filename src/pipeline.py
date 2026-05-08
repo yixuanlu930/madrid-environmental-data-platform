@@ -10,6 +10,7 @@ from src.sources import fetch_historical_weather, fetch_air_quality
 from src.storage import upload_pipeline_outputs
 from src.transform import payload_to_hourly_wide_rows, wide_rows_to_long_rows, build_analytics_hourly_table, build_daily_summary
 from src.utils import write_csv, write_json, read_json, read_csv
+from src.db_loader import load_observations_long, load_hourly_wide, load_daily_summary
 
 WEATHER_WIDE_FIELDS = ["source", "dataset", "date", "time", "latitude", "longitude", "temperature_2m", "temperature_2m_unit", "precipitation", "precipitation_unit"]
 AIR_WIDE_FIELDS = ["source", "dataset", "date", "time", "latitude", "longitude", "ozone", "ozone_unit", "carbon_dioxide", "carbon_dioxide_unit"]
@@ -138,6 +139,11 @@ def run_preprocess(target_day: date | None = None) -> dict[str, Any]:
             "clean_air_quality_hourly": len(air_rows),
             "processed_long_observations": len(long_rows),
         }
+
+        # Carga en PostgreSQL (capa analítica – Día 2)
+        pg_loaded = load_observations_long(long_rows, day)
+        manifest["loaded_to_postgres"] = {"environment_observations_long": pg_loaded}
+
         manifest["status"] = "success"
 
     except Exception as exc:
@@ -199,6 +205,15 @@ def run_analytics(target_day: date | None = None) -> dict[str, Any]:
             "curated_hourly_wide": len(analytics_rows),
             "curated_daily_summary": len(summary_rows),
         }
+
+        # Carga en PostgreSQL (capa analítica – Día 2)
+        pg_wide = load_hourly_wide(analytics_rows, day)
+        pg_summary = load_daily_summary(summary_rows)
+        manifest["loaded_to_postgres"] = {
+            "hourly_environment_wide": pg_wide,
+            "daily_variable_summary": pg_summary,
+        }
+
         manifest["status"] = "success"
 
     except Exception as exc:

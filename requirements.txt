@@ -3,3 +3,5 @@ requests==2.32.3
 minio==7.2.10
 pandas==2.2.3
 jupyterlab==4.3.4
+psycopg2-binary==2.9.9
+

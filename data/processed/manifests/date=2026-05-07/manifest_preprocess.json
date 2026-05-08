@@ -1,0 +1,31 @@
+{
+  "stage": "preprocess",
+  "status": "success",
+  "date": "2026-05-07",
+  "coordinates": {
+    "latitude": 40.4168,
+    "longitude": -3.7038,
+    "timezone": "Europe/Madrid"
+  },
+  "outputs": [
+    "/app/data/clean/historical_weather_hourly/date=2026-05-07/weather_hourly.csv",
+    "/app/data/clean/air_quality_hourly/date=2026-05-07/air_quality_hourly.csv",
+    "/app/data/processed/environment_observations_long/date=2026-05-07/environment_observations_long.csv"
+  ],
+  "uploaded_to_minio": [
+    "air_quality_hourly/date=2026-05-07/air_quality_hourly.csv",
+    "historical_weather_hourly/date=2026-05-07/weather_hourly.csv",
+    "environment_observations_long/date=2026-05-07/environment_observations_long.csv",
+    "manifests/date=2026-05-07/manifest.json",
+    "manifests/date=2026-05-07/manifest_ingest.json"
+  ],
+  "row_counts": {
+    "clean_historical_weather_hourly": 24,
+    "clean_air_quality_hourly": 24,
+    "processed_long_observations": 96
+  },
+  "errors": [],
+  "loaded_to_postgres": {
+    "environment_observations_long": 96
+  }
+}
