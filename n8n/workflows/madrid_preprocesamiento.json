@@ -1,14 +1,8 @@
 {
-  "id": "madrid_preprocesamiento",
   "name": "Madrid 2 - Preprocesamiento",
-  "active": true,
   "nodes": [
     {
       "parameters": {
-        "host": "rabbitmq",
-        "port": 5672,
-        "user": "admin",
-        "password": "admin",
         "queue": "madrid.preprocesamiento",
         "options": {}
       },
@@ -16,149 +10,242 @@
       "name": "RabbitMQ Trigger",
       "type": "n8n-nodes-base.rabbitmqTrigger",
       "typeVersion": 1,
-      "position": [-900, 100]
+      "position": [
+        -896,
+        112
+      ],
+      "credentials": {
+        "rabbitmq": {
+          "id": "CLlVYg0ubIrrhlB6",
+          "name": "RabbitMQ account 2"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "// Parsea el mensaje de RabbitMQ y descarga el raw desde MinIO\nconst msg = JSON.parse($input.item.json.content || JSON.stringify($input.item.json));\nconst date = msg.date;\n\n// Construye las URLs de descarga desde MinIO\nconst baseUrl = 'http://minio:9000/madrid-openmeteo-environment';\nconst rawUrl = `${baseUrl}/raw/ingesta/date=${date}/raw_${date}.json`;\n\nreturn [{ json: { date, rawUrl } }];"
+        "jsCode": "const raw = $input.item.json;\nconst content = typeof raw.content === 'string' ? raw.content : JSON.stringify(raw.content);\nconst msg = JSON.parse(content.trim());\nconst date = msg.date;\nconst records = msg.records;\n\nconst result = [];\nfor (const r of records) {\n  const dt = new Date(r.time);\n  result.push({\n    json: {\n      date: r.date,\n      time: r.time,\n      hour: String(dt.getHours()).padStart(2, '0'),\n      year: String(dt.getFullYear()),\n      month: String(dt.getMonth() + 1).padStart(2, '0'),\n      day: String(dt.getDate()).padStart(2, '0'),\n      date_partition: `date=${date}`,\n      latitude: Number(r.latitude),\n      longitude: Number(r.longitude),\n      temperature_2m: r.temperature_2m,\n      temperature_2m_unit: r.temperature_2m_unit,\n      precipitation: r.precipitation,\n      precipitation_unit: r.precipitation_unit,\n      ozone: r.ozone,\n      ozone_unit: r.ozone_unit,\n      carbon_dioxide: r.carbon_dioxide,\n      carbon_dioxide_unit: r.carbon_dioxide_unit\n    }\n  });\n}\n\nreturn result;"
       },
       "id": "ParseMessage",
       "name": "Code in JavaScript",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-620, 100]
+      "position": [
+        -688,
+        112
+      ]
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "={{ $json.rawUrl }}",
-        "options": { "timeout": 60000 }
+        "jsCode": "const items = $input.all().map(i => i.json);\nconst date = items[0].date;\n\nconst longRows = [];\nitems.forEach(r => {\n  [\n    {var: 'temperature_2m', unit: r.temperature_2m_unit, ds: 'historical_weather'},\n    {var: 'precipitation',  unit: r.precipitation_unit,  ds: 'historical_weather'},\n    {var: 'ozone',          unit: r.ozone_unit,          ds: 'air_quality'},\n    {var: 'carbon_dioxide', unit: r.carbon_dioxide_unit, ds: 'air_quality'}\n  ].forEach(v => {\n    longRows.push({\n      source: 'open_meteo', dataset: v.ds,\n      date: r.date, year: r.year, month: r.month,\n      day: r.day, hour: r.hour, time: r.time,\n      latitude: r.latitude, longitude: r.longitude,\n      variable: v.var, value: r[v.var], unit: v.unit\n    });\n  });\n});\n\nreturn [{\n  json: {\n    date,\n    rows: longRows,\n    path: `processed/environment_observations_long/date=${date}/environment_observations_long_${date}.csv`,\n    type: 'processed'\n  }\n}];"
       },
-      "id": "DownloadRaw",
-      "name": "Descargar Raw",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [-340, 100]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Transforma los datos raw en tablas clean (weather y air)\nconst date = $('Code in JavaScript').item.json.date;\nconst raw = $input.item.json;\n\nconst weather = raw.weather;\nconst air = raw.air_quality;\n\n// Genera filas clean para weather (24 filas horarias)\nconst weatherRows = weather.hourly.time.map((time, i) => ({\n  source: 'open_meteo',\n  dataset: 'historical_weather',\n  date: date,\n  time: time,\n  latitude: weather.latitude,\n  longitude: weather.longitude,\n  temperature_2m: weather.hourly.temperature_2m[i] ?? '',\n  temperature_2m_unit: weather.hourly_units?.temperature_2m ?? '°C',\n  precipitation: weather.hourly.precipitation[i] ?? '',\n  precipitation_unit: weather.hourly_units?.precipitation ?? 'mm'\n}));\n\n// Genera filas clean para air quality (24 filas horarias)\nconst airRows = air.hourly.time.map((time, i) => ({\n  source: 'open_meteo',\n  dataset: 'air_quality',\n  date: date,\n  time: time,\n  latitude: air.latitude,\n  longitude: air.longitude,\n  ozone: air.hourly.ozone[i] ?? '',\n  ozone_unit: air.hourly_units?.ozone ?? 'μg/m³',\n  carbon_dioxide: air.hourly.carbon_dioxide[i] ?? '',\n  carbon_dioxide_unit: air.hourly_units?.carbon_dioxide ?? 'ppm'\n}));\n\n// Genera tabla processed en formato largo (96 filas: 24h x 4 variables)\nconst longRows = [];\nweatherRows.forEach(row => {\n  ['temperature_2m', 'precipitation'].forEach(variable => {\n    longRows.push({\n      source: row.source, dataset: row.dataset, date: row.date, time: row.time,\n      latitude: row.latitude, longitude: row.longitude,\n      variable, value: row[variable], unit: row[variable + '_unit']\n    });\n  });\n});\nairRows.forEach(row => {\n  ['ozone', 'carbon_dioxide'].forEach(variable => {\n    longRows.push({\n      source: row.source, dataset: row.dataset, date: row.date, time: row.time,\n      latitude: row.latitude, longitude: row.longitude,\n      variable, value: row[variable], unit: row[variable + '_unit']\n    });\n  });\n});\n\nreturn [{ json: { date, weatherRows, airRows, longRows } }];"
-      },
-      "id": "Transform",
-      "name": "Code in JavaScript1",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-60, 100]
+      "position": [
+        -480,
+        0
+      ],
+      "id": "f8987487-9794-4df2-a6f3-b60b370f2c7b",
+      "name": "Code in JavaScript1"
     },
     {
       "parameters": {
-        "jsCode": "// Convierte weatherRows a CSV\nconst { date, weatherRows } = $input.item.json;\nconst fields = ['source','dataset','date','time','latitude','longitude','temperature_2m','temperature_2m_unit','precipitation','precipitation_unit'];\nconst csv = [fields.join(','), ...weatherRows.map(r => fields.map(f => r[f] ?? '').join(','))].join('\\n');\nreturn [{ json: { date, csv, fileName: `weather_hourly.csv`, path: `clean/historical_weather_hourly/date=${date}/weather_hourly.csv` } }];"
+        "jsCode": "const items = $input.all().map(i => i.json);\nconst date = items[0].date;\n\nconst fields = [\n  'date','year','month','day','hour','time','latitude','longitude',\n  'temperature_2m','temperature_2m_unit','precipitation','precipitation_unit',\n  'ozone','ozone_unit','carbon_dioxide','carbon_dioxide_unit'\n];\n\nreturn [{\n  json: {\n    date,\n    rows: items,\n    path: `clean/environment_clean/date=${date}/environment_clean_${date}.csv`,\n    type: 'clean'\n  }\n}];"
       },
-      "id": "BuildWeatherCSV",
-      "name": "Code in JavaScript2",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [200, -140]
+      "position": [
+        -480,
+        192
+      ],
+      "id": "ec3ed42e-5f6d-430a-82c1-f02b695593a7",
+      "name": "Code in JavaScript2"
     },
     {
       "parameters": {
-        "jsCode": "// Convierte airRows a CSV\nconst { date, airRows } = $('Code in JavaScript1').item.json;\nconst fields = ['source','dataset','date','time','latitude','longitude','ozone','ozone_unit','carbon_dioxide','carbon_dioxide_unit'];\nconst csv = [fields.join(','), ...airRows.map(r => fields.map(f => r[f] ?? '').join(','))].join('\\n');\nreturn [{ json: { date, csv, fileName: `air_quality_hourly.csv`, path: `clean/air_quality_hourly/date=${date}/air_quality_hourly.csv` } }];"
+        "options": {}
       },
-      "id": "BuildAirCSV",
-      "name": "Code in JavaScript3",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [200, 60]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Convierte longRows (processed) a CSV\nconst { date, longRows } = $('Code in JavaScript1').item.json;\nconst fields = ['source','dataset','date','time','latitude','longitude','variable','value','unit'];\nconst csv = [fields.join(','), ...longRows.map(r => fields.map(f => r[f] ?? '').join(','))].join('\\n');\nreturn [{ json: { date, csv, fileName: `environment_observations_long.csv`, path: `processed/environment_observations_long/date=${date}/environment_observations_long.csv` } }];"
-      },
-      "id": "BuildLongCSV",
-      "name": "Code in JavaScript4",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [200, 260]
-    },
-    {
-      "parameters": {
-        "mode": "append",
-        "numberInputs": 3
-      },
-      "id": "MergeCSVs",
-      "name": "Merge",
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 3,
-      "position": [460, 60]
-    },
-    {
-      "parameters": {
-        "sourceProperty": "csv",
-        "fileName": "={{ $json.fileName }}",
-        "mimeType": "text/csv",
-        "dataPropertyName": "data"
-      },
-      "id": "ConvertToFile",
-      "name": "Convert to File",
       "type": "n8n-nodes-base.convertToFile",
       "typeVersion": 1.1,
-      "position": [700, 60]
+      "position": [
+        -272,
+        0
+      ],
+      "id": "05eee995-2fb8-4e2b-9e55-edc8d11252a7",
+      "name": "Convert to File"
     },
     {
       "parameters": {
-        "protocol": "s3",
-        "host": "minio",
-        "port": 9000,
-        "bucket": "madrid-openmeteo-environment",
-        "path": "={{ $json.path }}",
-        "accessKeyId": "minioadmin",
-        "secretAccessKey": "minioadmin",
-        "ssl": false
+        "operation": "upload",
+        "bucketName": "madrid-openmeteo-environment",
+        "fileName": "=={{ 'clean/environment_clean/date=' + $json.date + '/environment_clean_' + $json.date + '.csv' }}",
+        "additionalFields": {}
       },
-      "id": "UploadClean",
-      "name": "Upload a file",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [940, 60]
+      "position": [
+        -64,
+        0
+      ],
+      "id": "c50dd346-9bb1-439a-ab94-ff1aaa18a0b0",
+      "name": "Upload a file",
+      "credentials": {
+        "s3": {
+          "id": "pN1COipp7gzYPtMJ",
+          "name": "S3 account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        -272,
+        192
+      ],
+      "id": "eaa04a10-5238-4fb3-920b-5376740eea3b",
+      "name": "Convert to File1"
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "madrid-openmeteo-environment",
+        "fileName": "=={{ 'processed/environment_observations_long/date=' + $json.date + '/environment_observations_long_' + $json.date + '.csv' }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        -64,
+        192
+      ],
+      "id": "11cee272-9ba4-4693-9543-64e53e38718c",
+      "name": "Upload a file1",
+      "credentials": {
+        "s3": {
+          "id": "pN1COipp7gzYPtMJ",
+          "name": "S3 account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "queue": "madrid.analitica",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rabbitmq",
+      "typeVersion": 1.1,
+      "position": [
+        144,
+        192
+      ],
+      "id": "2602f168-011b-4b26-8175-cddf863c3d61",
+      "name": "RabbitMQ",
+      "credentials": {
+        "rabbitmq": {
+          "id": "CLlVYg0ubIrrhlB6",
+          "name": "RabbitMQ account 2"
+        }
+      }
     }
   ],
+  "pinData": {},
   "connections": {
     "RabbitMQ Trigger": {
-      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Code in JavaScript": {
-      "main": [[{ "node": "Descargar Raw", "type": "main", "index": 0 }]]
-    },
-    "Descargar Raw": {
-      "main": [[{ "node": "Code in JavaScript1", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Code in JavaScript1": {
       "main": [
         [
-          { "node": "Code in JavaScript2", "type": "main", "index": 0 },
-          { "node": "Code in JavaScript3", "type": "main", "index": 0 },
-          { "node": "Code in JavaScript4", "type": "main", "index": 0 }
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Upload a file",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Code in JavaScript2": {
-      "main": [[{ "node": "Merge", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Convert to File1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
-    "Code in JavaScript3": {
-      "main": [[{ "node": "Merge", "type": "main", "index": 1 }]]
+    "Convert to File1": {
+      "main": [
+        [
+          {
+            "node": "Upload a file1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
-    "Code in JavaScript4": {
-      "main": [[{ "node": "Merge", "type": "main", "index": 2 }]]
-    },
-    "Merge": {
-      "main": [[{ "node": "Convert to File", "type": "main", "index": 0 }]]
-    },
-    "Convert to File": {
-      "main": [[{ "node": "Upload a file", "type": "main", "index": 0 }]]
+    "Upload a file1": {
+      "main": [
+        [
+          {
+            "node": "RabbitMQ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "settings": { "executionOrder": "v1" },
-  "staticData": null,
-  "meta": { "templateCredsSetupCompleted": true },
-  "pinData": {}
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "ced711c8-04f1-4eaf-8c3e-f54ef469e99f",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f0a5fd3a6c279fbb2c697c8c0d30357f09b0d7fbb268bee6dc0ca478c07edb11"
+  },
+  "id": "madrid_preprocesamiento",
+  "tags": []
 }

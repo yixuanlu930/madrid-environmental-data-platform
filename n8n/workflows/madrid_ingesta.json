@@ -1,19 +1,24 @@
 {
-  "id": "madrid_ingesta",
   "name": "Madrid 1 - Ingesta",
-  "active": true,
   "nodes": [
     {
       "parameters": {
         "rule": {
-          "interval": [{ "field": "days", "triggerAtHour": 7, "triggerAtMinute": 0 }]
+          "interval": [
+            {
+              "triggerAtHour": 7
+            }
+          ]
         }
       },
       "id": "ScheduleTrigger",
       "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [-900, 0]
+      "position": [
+        -896,
+        0
+      ]
     },
     {
       "parameters": {},
@@ -21,7 +26,10 @@
       "name": "When clicking 'Execute workflow'",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [-900, 200]
+      "position": [
+        -896,
+        208
+      ]
     },
     {
       "parameters": {
@@ -31,151 +39,284 @@
       "name": "Code in JavaScript",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-620, 100]
+      "position": [
+        -624,
+        112
+      ]
     },
     {
       "parameters": {
-        "method": "GET",
         "url": "={{ $json.weatherUrl }}",
-        "options": { "timeout": 60000 }
+        "options": {
+          "timeout": 60000
+        }
       },
       "id": "FetchWeather",
       "name": "HTTP Request Weather",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-340, -60]
+      "position": [
+        -336,
+        -64
+      ]
     },
     {
       "parameters": {
-        "method": "GET",
         "url": "={{ $('Code in JavaScript').item.json.airUrl }}",
-        "options": { "timeout": 60000 }
+        "options": {
+          "timeout": 60000
+        }
       },
       "id": "FetchAir",
       "name": "HTTP Request Air Quality",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-340, 160]
+      "position": [
+        -336,
+        160
+      ]
     },
     {
       "parameters": {
-        "mode": "combineBySql",
-        "numberInputs": 2
+        "mode": "combineBySql"
       },
       "id": "MergeAPIs",
       "name": "Merge",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3,
-      "position": [-60, 40]
+      "position": [
+        -64,
+        48
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Empaqueta las dos respuestas de API en un objeto con la fecha\nconst date = $('Code in JavaScript').item.json.date;\nconst weather = $input.all()[0].json;\nconst air = $input.all()[1].json;\n\nreturn [{\n  json: {\n    date: date,\n    weather: weather,\n    air_quality: air\n  }\n}];"
+        "jsCode": "// Empaqueta las dos respuestas de API en un objeto con la fecha\nconst date = $('Code in JavaScript').item.json.date;\n\n// Con Merge en modo combinar, los items vienen como array\nconst allItems = $input.all();\n\n// El primer item es weather, el segundo es air quality\n// Si solo llega 1 item, los datos están fusionados en el mismo objeto\nlet weather, air;\n\nif (allItems.length >= 2) {\n  weather = allItems[0].json;\n  air = allItems[1].json;\n} else {\n  // Fallback: un solo item con ambos datos\n  weather = allItems[0].json;\n  air = allItems[0].json;\n}\n\nreturn [{\n  json: {\n    date: date,\n    weather: weather,\n    air_quality: air\n  }\n}];"
       },
       "id": "PackageData",
       "name": "Code in JavaScript1",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [180, 40]
+      "position": [
+        192,
+        48
+      ]
     },
     {
       "parameters": {
-        "sourceProperty": "=",
-        "fileName": "={{ 'raw_' + $('Code in JavaScript').item.json.date + '.json' }}",
-        "mimeType": "application/json",
-        "dataPropertyName": "data"
+        "options": {}
       },
       "id": "ConvertToFile",
       "name": "Convert to File",
       "type": "n8n-nodes-base.convertToFile",
       "typeVersion": 1.1,
-      "position": [420, -80]
+      "position": [
+        432,
+        -80
+      ]
     },
     {
       "parameters": {
-        "protocol": "s3",
-        "host": "minio",
-        "port": 9000,
-        "bucket": "madrid-openmeteo-environment",
-        "path": "={{ 'raw/ingesta/date=' + $('Code in JavaScript').item.json.date + '/raw_' + $('Code in JavaScript').item.json.date + '.json' }}",
-        "accessKeyId": "minioadmin",
-        "secretAccessKey": "minioadmin",
-        "ssl": false
+        "operation": "upload",
+        "bucketName": "madrid-openmeteo-environment",
+        "fileName": "=={{ 'raw/ingesta/date=' + $('Code in JavaScript').item.json.date + '/raw_' + $('Code in JavaScript').item.json.date + '.json' }}",
+        "additionalFields": {}
       },
       "id": "UploadRaw",
       "name": "Upload a file",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [660, -80]
+      "position": [
+        672,
+        -80
+      ],
+      "credentials": {
+        "s3": {
+          "id": "pN1COipp7gzYPtMJ",
+          "name": "S3 account"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "// Prepara el mensaje para RabbitMQ con la fecha procesada\nconst date = $('Code in JavaScript').item.json.date;\nreturn [{\n  json: {\n    event: 'ingesta_completada',\n    date: date,\n    timestamp: new Date().toISOString()\n  }\n}];"
+        "jsCode": "const date = $('Code in JavaScript').item.json.date;\nconst records = $('Code in JavaScript3').all().map(i => i.json);\n\nreturn [{\n  json: {\n    event: 'ingesta_completada',\n    date: date,\n    timestamp: new Date().toISOString(),\n    records: records\n  }\n}];"
       },
       "id": "BuildMessage",
       "name": "Code in JavaScript2",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [420, 180]
+      "position": [
+        608,
+        224
+      ]
     },
     {
       "parameters": {
-        "host": "rabbitmq",
-        "port": 5672,
-        "user": "admin",
-        "password": "admin",
         "queue": "madrid.preprocesamiento",
-        "message": "={{ JSON.stringify($json) }}",
         "options": {}
       },
       "id": "PublishRabbitMQ",
       "name": "RabbitMQ",
       "type": "n8n-nodes-base.rabbitmq",
       "typeVersion": 1,
-      "position": [660, 180]
+      "position": [
+        848,
+        224
+      ],
+      "credentials": {
+        "rabbitmq": {
+          "id": "vKJqd216F9wwwBZ7",
+          "name": "RabbitMQ account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Divide el item en 24 items, uno por hora\nconst date = $('Code in JavaScript').item.json.date;\nconst data = $input.item.json;\n\n// Los datos pueden venir de dos estructuras distintas\nconst weather = data.weather || data;\nconst air = data.air_quality || data;\n\nconst items = [];\n\nfor (let i = 0; i < 24; i++) {\n  items.push({\n    json: {\n      date: date,\n      hour: i,\n      time: (weather.hourly?.time || [])[i] ?? `${date}T${String(i).padStart(2,'0')}:00`,\n      latitude: weather.latitude ?? 40.4168,\n      longitude: weather.longitude ?? -3.7038,\n      temperature_2m: (weather.hourly?.temperature_2m || [])[i] ?? null,\n      temperature_2m_unit: weather.hourly_units?.temperature_2m ?? '°C',\n      precipitation: (weather.hourly?.precipitation || [])[i] ?? null,\n      precipitation_unit: weather.hourly_units?.precipitation ?? 'mm',\n      ozone: (air.hourly?.ozone || [])[i] ?? null,\n      ozone_unit: air.hourly_units?.ozone ?? 'μg/m³',\n      carbon_dioxide: (air.hourly?.carbon_dioxide || [])[i] ?? null,\n      carbon_dioxide_unit: air.hourly_units?.carbon_dioxide ?? 'ppm'\n    }\n  });\n}\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        224
+      ],
+      "id": "95ab9812-6579-4c46-80af-234a477a4798",
+      "name": "Code in JavaScript3"
     }
   ],
+  "pinData": {},
   "connections": {
     "Schedule Trigger": {
-      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "When clicking 'Execute workflow'": {
-      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Code in JavaScript": {
       "main": [
         [
-          { "node": "HTTP Request Weather", "type": "main", "index": 0 },
-          { "node": "HTTP Request Air Quality", "type": "main", "index": 0 }
+          {
+            "node": "HTTP Request Weather",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP Request Air Quality",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "HTTP Request Weather": {
-      "main": [[{ "node": "Merge", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "HTTP Request Air Quality": {
-      "main": [[{ "node": "Merge", "type": "main", "index": 1 }]]
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
     },
     "Merge": {
-      "main": [[{ "node": "Code in JavaScript1", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Code in JavaScript1": {
       "main": [
         [
-          { "node": "Convert to File", "type": "main", "index": 0 },
-          { "node": "Code in JavaScript2", "type": "main", "index": 0 }
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code in JavaScript3",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Convert to File": {
-      "main": [[{ "node": "Upload a file", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Upload a file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Code in JavaScript2": {
-      "main": [[{ "node": "RabbitMQ", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "RabbitMQ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "settings": { "executionOrder": "v1" },
-  "staticData": null,
-  "meta": { "templateCredsSetupCompleted": true },
-  "pinData": {}
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "32f76c7a-690c-4d60-ba0b-8efe3ad23fe2",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f0a5fd3a6c279fbb2c697c8c0d30357f09b0d7fbb268bee6dc0ca478c07edb11"
+  },
+  "id": "madrid_ingesta",
+  "tags": []
 }
