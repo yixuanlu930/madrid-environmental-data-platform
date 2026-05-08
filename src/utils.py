@@ -1,4 +1,3 @@
-
 import csv
 import json
 from pathlib import Path
@@ -18,6 +17,12 @@ def write_json(path: str | Path, data: Any) -> Path:
     return path
 
 
+def read_json(path: str | Path) -> Any:
+    path = Path(path)
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def write_csv(path: str | Path, rows: Iterable[Mapping[str, Any]], fieldnames: list[str]) -> Path:
     path = ensure_parent(path)
     with path.open("w", encoding="utf-8", newline="") as f:
@@ -26,6 +31,12 @@ def write_csv(path: str | Path, rows: Iterable[Mapping[str, Any]], fieldnames: l
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in fieldnames})
     return path
+
+
+def read_csv(path: str | Path) -> list[dict[str, Any]]:
+    path = Path(path)
+    with path.open("r", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
 
 
 def safe_float(value: Any):

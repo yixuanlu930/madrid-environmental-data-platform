@@ -1,0 +1,157 @@
+{
+  "id": "madrid_ingesta",
+  "name": "Madrid 1 - Ingesta",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 7,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "ScheduleTrigger",
+      "name": "Daily Schedule 07:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-600, -80]
+    },
+    {
+      "parameters": {},
+      "id": "ManualTrigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-600, 120]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://etl:8000/ingest",
+        "sendQuery": false,
+        "options": { "timeout": 120000 }
+      },
+      "id": "RunIngest",
+      "name": "Ejecutar Ingesta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-320, 20]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "status-check",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "success",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "CheckIngest",
+      "name": "Ingesta OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-60, 20]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://etl:8000/analytics",
+        "sendQuery": false,
+        "options": { "timeout": 120000 }
+      },
+      "id": "TriggerAnalytics",
+      "name": "Lanzar Analítica",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [200, -80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "analytics-status-check",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "success",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "CheckAnalytics",
+      "name": "Analítica OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, -80]
+    },
+    {
+      "parameters": {},
+      "id": "LogSuccess",
+      "name": "Log success",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [680, -180]
+    },
+    {
+      "parameters": {},
+      "id": "LogErrorAnalytics",
+      "name": "Log error analítica",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [680, 20]
+    },
+    {
+      "parameters": {},
+      "id": "LogErrorIngest",
+      "name": "Log error ingesta",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [-60, 160]
+    }
+  ],
+  "connections": {
+    "Daily Schedule 07:00": {
+      "main": [[{ "node": "Ejecutar Ingesta", "type": "main", "index": 0 }]]
+    },
+    "Manual Trigger": {
+      "main": [[{ "node": "Ejecutar Ingesta", "type": "main", "index": 0 }]]
+    },
+    "Ejecutar Ingesta": {
+      "main": [[{ "node": "Ingesta OK?", "type": "main", "index": 0 }]]
+    },
+    "Ingesta OK?": {
+      "main": [
+        [{ "node": "Lanzar Analítica", "type": "main", "index": 0 }],
+        [{ "node": "Log error ingesta", "type": "main", "index": 0 }]
+      ]
+    },
+    "Lanzar Analítica": {
+      "main": [[{ "node": "Analítica OK?", "type": "main", "index": 0 }]]
+    },
+    "Analítica OK?": {
+      "main": [
+        [{ "node": "Log success", "type": "main", "index": 0 }],
+        [{ "node": "Log error analítica", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "staticData": null,
+  "meta": { "templateCredsSetupCompleted": true },
+  "pinData": {}
+}

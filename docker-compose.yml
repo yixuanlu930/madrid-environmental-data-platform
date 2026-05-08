@@ -104,8 +104,10 @@ services:
     entrypoint: >
       /bin/sh -c "
       sleep 10;
-      n8n import:workflow --input=/workflows/madrid_environment_daily.json &&
-      echo 'Workflow imported successfully';
+      n8n import:workflow --input=/workflows/madrid_ingesta.json &&
+      n8n import:workflow --input=/workflows/madrid_preprocesamiento.json &&
+      n8n import:workflow --input=/workflows/madrid_analitica.json &&
+      echo 'Todos los workflows importados correctamente';
       exit 0;
       "
     environment:

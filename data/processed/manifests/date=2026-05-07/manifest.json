@@ -1,0 +1,49 @@
+{
+  "status": "success",
+  "date": "2026-05-07",
+  "coordinates": {
+    "latitude": 40.4168,
+    "longitude": -3.7038,
+    "timezone": "Europe/Madrid"
+  },
+  "sources": [
+    "open_meteo_historical_weather_api",
+    "open_meteo_air_quality_api"
+  ],
+  "selected_variables": {
+    "historical_weather": [
+      "temperature_2m",
+      "precipitation"
+    ],
+    "air_quality": [
+      "ozone",
+      "carbon_dioxide"
+    ]
+  },
+  "outputs": [
+    "/app/data/raw/open_meteo_historical_weather/date=2026-05-07/weather.json",
+    "/app/data/raw/open_meteo_air_quality/date=2026-05-07/air_quality.json",
+    "/app/data/clean/historical_weather_hourly/date=2026-05-07/weather_hourly.csv",
+    "/app/data/clean/air_quality_hourly/date=2026-05-07/air_quality_hourly.csv",
+    "/app/data/processed/environment_observations_long/date=2026-05-07/environment_observations_long.csv",
+    "/app/data/curated/hourly_environment_wide/date=2026-05-07/hourly_environment_wide.csv",
+    "/app/data/curated/daily_variable_summary/date=2026-05-07/daily_variable_summary.csv"
+  ],
+  "uploaded_to_minio": [
+    "clean/air_quality_hourly/date=2026-05-07/air_quality_hourly.csv",
+    "clean/historical_weather_hourly/date=2026-05-07/weather_hourly.csv",
+    "curated/daily_variable_summary/date=2026-05-07/daily_variable_summary.csv",
+    "curated/hourly_environment_wide/date=2026-05-07/hourly_environment_wide.csv",
+    "processed/environment_observations_long/date=2026-05-07/environment_observations_long.csv",
+    "raw/open_meteo_air_quality/date=2026-05-07/air_quality.json",
+    "raw/open_meteo_historical_weather/date=2026-05-07/weather.json"
+  ],
+  "row_counts": {
+    "clean_historical_weather_hourly": 24,
+    "clean_air_quality_hourly": 24,
+    "processed_long_observations": 96,
+    "curated_hourly_wide": 24,
+    "curated_daily_summary": 4
+  },
+  "errors": []
+}

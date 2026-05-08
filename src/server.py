@@ -1,10 +1,10 @@
-
 from __future__ import annotations
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 from src.config import settings
-from src.pipeline import parse_date, run_pipeline
+from src.pipeline import parse_date, run_ingest, run_preprocess, run_analytics, run_pipeline
+
 
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, status: int, payload: dict):
@@ -20,27 +20,55 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle(self):
         parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+
+        # ── Healthcheck ──────────────────────────────
         if parsed.path == "/health":
             self._send_json(200, {"status": "ok", "service": "madrid-openmeteo-etl"})
             return
-        if parsed.path == "/run":
-            query = parse_qs(parsed.query)
+
+        # ── Parseo de fecha común ────────────────────
+        if parsed.path in ("/ingest", "/preprocess", "/analytics", "/run"):
             try:
                 target_day = parse_date(query.get("date", [None])[0])
             except ValueError:
                 self._send_json(400, {"status": "error", "message": "Invalid date. Use YYYY-MM-DD."})
                 return
+
+        # ── Stage 1: Ingesta ─────────────────────────
+        if parsed.path == "/ingest":
+            manifest = run_ingest(target_day)
+            self._send_json(200 if manifest.get("status") == "success" else 500, manifest)
+            return
+
+        # ── Stage 2: Preprocesamiento ─────────────────
+        if parsed.path == "/preprocess":
+            manifest = run_preprocess(target_day)
+            self._send_json(200 if manifest.get("status") == "success" else 500, manifest)
+            return
+
+        # ── Stage 3: Analítica ────────────────────────
+        if parsed.path == "/analytics":
+            manifest = run_analytics(target_day)
+            self._send_json(200 if manifest.get("status") == "success" else 500, manifest)
+            return
+
+        # ── Compatibilidad: ejecuta los 3 stages ─────
+        if parsed.path == "/run":
             manifest = run_pipeline(target_day)
             self._send_json(200 if manifest.get("status") == "success" else 500, manifest)
             return
-        self._send_json(404, {"status": "error", "message": "Not found"})
+
+        self._send_json(404, {"status": "error", "message": "Not found. Available endpoints: /health /ingest /preprocess /analytics /run"})
 
     def log_message(self, format, *args):
         print("%s - %s" % (self.address_string(), format % args))
 
+
 def main():
     server = HTTPServer(("0.0.0.0", settings.etl_port), Handler)
     print(f"ETL service listening on port {settings.etl_port}")
+    print("Endpoints: /health  /ingest  /preprocess  /analytics  /run")
     server.serve_forever()
 
 if __name__ == "__main__":
