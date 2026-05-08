@@ -5,97 +5,156 @@
   "nodes": [
     {
       "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "field": "days",
-              "triggerAtHour": 6,
-              "triggerAtMinute": 0
-            }
-          ]
-        }
-      },
-      "id": "ScheduleTrigger",
-      "name": "Daily Schedule 06:00",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [-600, -80]
-    },
-    {
-      "parameters": {},
-      "id": "ManualTrigger",
-      "name": "Manual Trigger",
-      "type": "n8n-nodes-base.manualTrigger",
-      "typeVersion": 1,
-      "position": [-600, 120]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://etl:8000/preprocess",
-        "sendQuery": false,
-        "options": { "timeout": 120000 }
-      },
-      "id": "RunPreprocess",
-      "name": "Ejecutar Preprocesamiento",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [-320, 20]
-    },
-    {
-      "parameters": {
-        "conditions": {
-          "options": { "caseSensitive": true, "typeValidation": "strict" },
-          "conditions": [
-            {
-              "id": "status-check",
-              "leftValue": "={{ $json.status }}",
-              "rightValue": "success",
-              "operator": { "type": "string", "operation": "equals" }
-            }
-          ],
-          "combinator": "and"
-        },
+        "host": "rabbitmq",
+        "port": 5672,
+        "user": "admin",
+        "password": "admin",
+        "queue": "madrid.preprocesamiento",
         "options": {}
       },
-      "id": "CheckPreprocess",
-      "name": "Preprocesamiento OK?",
-      "type": "n8n-nodes-base.if",
+      "id": "RabbitMQTrigger",
+      "name": "RabbitMQ Trigger",
+      "type": "n8n-nodes-base.rabbitmqTrigger",
+      "typeVersion": 1,
+      "position": [-900, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parsea el mensaje de RabbitMQ y descarga el raw desde MinIO\nconst msg = JSON.parse($input.item.json.content || JSON.stringify($input.item.json));\nconst date = msg.date;\n\n// Construye las URLs de descarga desde MinIO\nconst baseUrl = 'http://minio:9000/madrid-openmeteo-environment';\nconst rawUrl = `${baseUrl}/raw/ingesta/date=${date}/raw_${date}.json`;\n\nreturn [{ json: { date, rawUrl } }];"
+      },
+      "id": "ParseMessage",
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-60, 20]
+      "position": [-620, 100]
     },
     {
-      "parameters": {},
-      "id": "LogSuccess",
-      "name": "Log success",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [200, -80]
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.rawUrl }}",
+        "options": { "timeout": 60000 }
+      },
+      "id": "DownloadRaw",
+      "name": "Descargar Raw",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-340, 100]
     },
     {
-      "parameters": {},
-      "id": "LogError",
-      "name": "Log error",
-      "type": "n8n-nodes-base.noOp",
+      "parameters": {
+        "jsCode": "// Transforma los datos raw en tablas clean (weather y air)\nconst date = $('Code in JavaScript').item.json.date;\nconst raw = $input.item.json;\n\nconst weather = raw.weather;\nconst air = raw.air_quality;\n\n// Genera filas clean para weather (24 filas horarias)\nconst weatherRows = weather.hourly.time.map((time, i) => ({\n  source: 'open_meteo',\n  dataset: 'historical_weather',\n  date: date,\n  time: time,\n  latitude: weather.latitude,\n  longitude: weather.longitude,\n  temperature_2m: weather.hourly.temperature_2m[i] ?? '',\n  temperature_2m_unit: weather.hourly_units?.temperature_2m ?? '°C',\n  precipitation: weather.hourly.precipitation[i] ?? '',\n  precipitation_unit: weather.hourly_units?.precipitation ?? 'mm'\n}));\n\n// Genera filas clean para air quality (24 filas horarias)\nconst airRows = air.hourly.time.map((time, i) => ({\n  source: 'open_meteo',\n  dataset: 'air_quality',\n  date: date,\n  time: time,\n  latitude: air.latitude,\n  longitude: air.longitude,\n  ozone: air.hourly.ozone[i] ?? '',\n  ozone_unit: air.hourly_units?.ozone ?? 'μg/m³',\n  carbon_dioxide: air.hourly.carbon_dioxide[i] ?? '',\n  carbon_dioxide_unit: air.hourly_units?.carbon_dioxide ?? 'ppm'\n}));\n\n// Genera tabla processed en formato largo (96 filas: 24h x 4 variables)\nconst longRows = [];\nweatherRows.forEach(row => {\n  ['temperature_2m', 'precipitation'].forEach(variable => {\n    longRows.push({\n      source: row.source, dataset: row.dataset, date: row.date, time: row.time,\n      latitude: row.latitude, longitude: row.longitude,\n      variable, value: row[variable], unit: row[variable + '_unit']\n    });\n  });\n});\nairRows.forEach(row => {\n  ['ozone', 'carbon_dioxide'].forEach(variable => {\n    longRows.push({\n      source: row.source, dataset: row.dataset, date: row.date, time: row.time,\n      latitude: row.latitude, longitude: row.longitude,\n      variable, value: row[variable], unit: row[variable + '_unit']\n    });\n  });\n});\n\nreturn [{ json: { date, weatherRows, airRows, longRows } }];"
+      },
+      "id": "Transform",
+      "name": "Code in JavaScript1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-60, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convierte weatherRows a CSV\nconst { date, weatherRows } = $input.item.json;\nconst fields = ['source','dataset','date','time','latitude','longitude','temperature_2m','temperature_2m_unit','precipitation','precipitation_unit'];\nconst csv = [fields.join(','), ...weatherRows.map(r => fields.map(f => r[f] ?? '').join(','))].join('\\n');\nreturn [{ json: { date, csv, fileName: `weather_hourly.csv`, path: `clean/historical_weather_hourly/date=${date}/weather_hourly.csv` } }];"
+      },
+      "id": "BuildWeatherCSV",
+      "name": "Code in JavaScript2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, -140]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convierte airRows a CSV\nconst { date, airRows } = $('Code in JavaScript1').item.json;\nconst fields = ['source','dataset','date','time','latitude','longitude','ozone','ozone_unit','carbon_dioxide','carbon_dioxide_unit'];\nconst csv = [fields.join(','), ...airRows.map(r => fields.map(f => r[f] ?? '').join(','))].join('\\n');\nreturn [{ json: { date, csv, fileName: `air_quality_hourly.csv`, path: `clean/air_quality_hourly/date=${date}/air_quality_hourly.csv` } }];"
+      },
+      "id": "BuildAirCSV",
+      "name": "Code in JavaScript3",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 60]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convierte longRows (processed) a CSV\nconst { date, longRows } = $('Code in JavaScript1').item.json;\nconst fields = ['source','dataset','date','time','latitude','longitude','variable','value','unit'];\nconst csv = [fields.join(','), ...longRows.map(r => fields.map(f => r[f] ?? '').join(','))].join('\\n');\nreturn [{ json: { date, csv, fileName: `environment_observations_long.csv`, path: `processed/environment_observations_long/date=${date}/environment_observations_long.csv` } }];"
+      },
+      "id": "BuildLongCSV",
+      "name": "Code in JavaScript4",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 260]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 3
+      },
+      "id": "MergeCSVs",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [460, 60]
+    },
+    {
+      "parameters": {
+        "sourceProperty": "csv",
+        "fileName": "={{ $json.fileName }}",
+        "mimeType": "text/csv",
+        "dataPropertyName": "data"
+      },
+      "id": "ConvertToFile",
+      "name": "Convert to File",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [700, 60]
+    },
+    {
+      "parameters": {
+        "protocol": "s3",
+        "host": "minio",
+        "port": 9000,
+        "bucket": "madrid-openmeteo-environment",
+        "path": "={{ $json.path }}",
+        "accessKeyId": "minioadmin",
+        "secretAccessKey": "minioadmin",
+        "ssl": false
+      },
+      "id": "UploadClean",
+      "name": "Upload a file",
+      "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [200, 120]
+      "position": [940, 60]
     }
   ],
   "connections": {
-    "Daily Schedule 06:00": {
-      "main": [[{ "node": "Ejecutar Preprocesamiento", "type": "main", "index": 0 }]]
+    "RabbitMQ Trigger": {
+      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
     },
-    "Manual Trigger": {
-      "main": [[{ "node": "Ejecutar Preprocesamiento", "type": "main", "index": 0 }]]
+    "Code in JavaScript": {
+      "main": [[{ "node": "Descargar Raw", "type": "main", "index": 0 }]]
     },
-    "Ejecutar Preprocesamiento": {
-      "main": [[{ "node": "Preprocesamiento OK?", "type": "main", "index": 0 }]]
+    "Descargar Raw": {
+      "main": [[{ "node": "Code in JavaScript1", "type": "main", "index": 0 }]]
     },
-    "Preprocesamiento OK?": {
+    "Code in JavaScript1": {
       "main": [
-        [{ "node": "Log success", "type": "main", "index": 0 }],
-        [{ "node": "Log error", "type": "main", "index": 0 }]
+        [
+          { "node": "Code in JavaScript2", "type": "main", "index": 0 },
+          { "node": "Code in JavaScript3", "type": "main", "index": 0 },
+          { "node": "Code in JavaScript4", "type": "main", "index": 0 }
+        ]
       ]
+    },
+    "Code in JavaScript2": {
+      "main": [[{ "node": "Merge", "type": "main", "index": 0 }]]
+    },
+    "Code in JavaScript3": {
+      "main": [[{ "node": "Merge", "type": "main", "index": 1 }]]
+    },
+    "Code in JavaScript4": {
+      "main": [[{ "node": "Merge", "type": "main", "index": 2 }]]
+    },
+    "Merge": {
+      "main": [[{ "node": "Convert to File", "type": "main", "index": 0 }]]
+    },
+    "Convert to File": {
+      "main": [[{ "node": "Upload a file", "type": "main", "index": 0 }]]
     }
   },
   "settings": { "executionOrder": "v1" },

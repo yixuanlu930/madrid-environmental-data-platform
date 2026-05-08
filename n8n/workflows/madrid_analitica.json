@@ -1,80 +1,226 @@
 {
   "id": "madrid_analitica",
-  "name": "Madrid 3 - Analítica",
+  "name": "Madrid 3 - Analitica",
   "active": true,
   "nodes": [
     {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "days", "triggerAtHour": 7, "triggerAtMinute": 30 }]
+        }
+      },
+      "id": "ScheduleTrigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-900, 0]
+    },
+    {
       "parameters": {},
       "id": "ManualTrigger",
-      "name": "Manual Trigger",
+      "name": "When clicking 'Execute workflow'",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [-600, 0]
+      "position": [-900, 200]
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://etl:8000/analytics",
-        "sendQuery": false,
-        "options": { "timeout": 120000 }
+        "jsCode": "// Calcula la fecha de ayer\nconst now = new Date();\nconst madridDate = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Madrid' }).format(now);\nconst yesterday = new Date(madridDate);\nyesterday.setDate(yesterday.getDate() - 1);\nconst date = yesterday.toISOString().split('T')[0];\n\nconst baseUrl = 'http://minio:9000/madrid-openmeteo-environment';\n\nreturn [{\n  json: {\n    date,\n    weatherUrl: `${baseUrl}/clean/historical_weather_hourly/date=${date}/weather_hourly.csv`,\n    airUrl: `${baseUrl}/clean/air_quality_hourly/date=${date}/air_quality_hourly.csv`\n  }\n}];"
       },
-      "id": "RunAnalytics",
-      "name": "Ejecutar Analítica",
+      "id": "BuildDate",
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-620, 100]
+    },
+    {
+      "parameters": {
+        "protocol": "s3",
+        "host": "minio",
+        "port": 9000,
+        "bucket": "madrid-openmeteo-environment",
+        "prefix": "={{ 'clean/historical_weather_hourly/date=' + $json.date + '/' }}",
+        "accessKeyId": "minioadmin",
+        "secretAccessKey": "minioadmin",
+        "ssl": false
+      },
+      "id": "GetManyFiles",
+      "name": "Get many files",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [-340, -60]
+    },
+    {
+      "parameters": {
+        "protocol": "s3",
+        "host": "minio",
+        "port": 9000,
+        "bucket": "madrid-openmeteo-environment",
+        "fileKey": "={{ $json.Key }}",
+        "accessKeyId": "minioadmin",
+        "secretAccessKey": "minioadmin",
+        "ssl": false
+      },
+      "id": "DownloadFile",
+      "name": "Download a file",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [-80, -60]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Code in JavaScript').item.json.weatherUrl }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "DownloadWeatherCSV",
+      "name": "Download Weather CSV",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-320, 0]
+      "position": [-340, 160]
     },
     {
       "parameters": {
-        "conditions": {
-          "options": { "caseSensitive": true, "typeValidation": "strict" },
-          "conditions": [
-            {
-              "id": "status-check",
-              "leftValue": "={{ $json.status }}",
-              "rightValue": "success",
-              "operator": { "type": "string", "operation": "equals" }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
+        "method": "GET",
+        "url": "={{ $('Code in JavaScript').item.json.airUrl }}",
+        "options": { "timeout": 30000 }
       },
-      "id": "CheckAnalytics",
-      "name": "Analítica OK?",
-      "type": "n8n-nodes-base.if",
+      "id": "DownloadAirCSV",
+      "name": "Download Air CSV",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-340, 340]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      },
+      "id": "MergeCSVs",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [-60, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parsea los dos CSVs descargados y genera las tablas curated\nconst date = $('Code in JavaScript').item.json.date;\nconst items = $input.all();\n\nfunction parseCSV(text) {\n  const lines = text.trim().split('\\n');\n  const headers = lines[0].split(',');\n  return lines.slice(1).map(line => {\n    const vals = line.split(',');\n    return Object.fromEntries(headers.map((h, i) => [h, vals[i] ?? '']));\n  });\n}\n\nconst weatherText = items[0].json.body || items[0].json.data || '';\nconst airText = items[1].json.body || items[1].json.data || '';\n\nconst weatherRows = parseCSV(weatherText);\nconst airRows = parseCSV(airText);\n\n// Tabla wide: une weather y air por hora (24 filas)\nconst wideRows = weatherRows.map((wr, i) => {\n  const ar = airRows[i] || {};\n  return {\n    date: wr.date,\n    time: wr.time,\n    latitude: wr.latitude,\n    longitude: wr.longitude,\n    temperature_2m: wr.temperature_2m,\n    precipitation: wr.precipitation,\n    ozone: ar.ozone ?? '',\n    carbon_dioxide: ar.carbon_dioxide ?? ''\n  };\n});\n\n// Resumen diario: min/avg/max por variable (4 filas)\nconst variables = [\n  { name: 'temperature_2m', source: 'open_meteo', dataset: 'historical_weather', unit: '°C' },\n  { name: 'precipitation',  source: 'open_meteo', dataset: 'historical_weather', unit: 'mm' },\n  { name: 'ozone',          source: 'open_meteo', dataset: 'air_quality',        unit: 'μg/m³' },\n  { name: 'carbon_dioxide', source: 'open_meteo', dataset: 'air_quality',        unit: 'ppm' }\n];\n\nconst summaryRows = variables.map(v => {\n  const vals = wideRows\n    .map(r => parseFloat(r[v.name]))\n    .filter(n => !isNaN(n));\n  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;\n  return {\n    date,\n    source: v.source,\n    dataset: v.dataset,\n    variable: v.name,\n    unit: v.unit,\n    observations: vals.length,\n    min_value: Math.min(...vals).toFixed(4),\n    avg_value: avg.toFixed(4),\n    max_value: Math.max(...vals).toFixed(4)\n  };\n});\n\nreturn [{ json: { date, wideRows, summaryRows } }];"
+      },
+      "id": "BuildCurated",
+      "name": "Code in JavaScript1",
+      "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-60, 0]
+      "position": [200, 240]
     },
     {
-      "parameters": {},
-      "id": "LogSuccess",
-      "name": "Log success",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [200, -100]
+      "parameters": {
+        "jsCode": "// Genera el CSV de la tabla wide (hourly_environment_wide)\nconst { date, wideRows } = $input.item.json;\nconst fields = ['date','time','latitude','longitude','temperature_2m','precipitation','ozone','carbon_dioxide'];\nconst csv = [fields.join(','), ...wideRows.map(r => fields.map(f => r[f] ?? '').join(','))].join('\\n');\nreturn [{ json: { date, csv, fileName: 'hourly_environment_wide.csv', path: `curated/hourly_environment_wide/date=${date}/hourly_environment_wide.csv` } }];"
+      },
+      "id": "BuildWideCSV",
+      "name": "Code in JavaScript2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 100]
     },
     {
-      "parameters": {},
-      "id": "LogError",
-      "name": "Log error",
-      "type": "n8n-nodes-base.noOp",
+      "parameters": {
+        "jsCode": "// Genera el CSV del resumen diario (daily_variable_summary)\nconst { date, summaryRows } = $('Code in JavaScript1').item.json;\nconst fields = ['date','source','dataset','variable','unit','observations','min_value','avg_value','max_value'];\nconst csv = [fields.join(','), ...summaryRows.map(r => fields.map(f => r[f] ?? '').join(','))].join('\\n');\nreturn [{ json: { date, csv, fileName: 'daily_variable_summary.csv', path: `curated/daily_variable_summary/date=${date}/daily_variable_summary.csv` } }];"
+      },
+      "id": "BuildSummaryCSV",
+      "name": "Code in JavaScript3",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 380]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      },
+      "id": "MergeCurated",
+      "name": "Merge Curated",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [700, 240]
+    },
+    {
+      "parameters": {
+        "sourceProperty": "csv",
+        "fileName": "={{ $json.fileName }}",
+        "mimeType": "text/csv",
+        "dataPropertyName": "data"
+      },
+      "id": "ConvertToFile",
+      "name": "Convert to File",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [940, 240]
+    },
+    {
+      "parameters": {
+        "protocol": "s3",
+        "host": "minio",
+        "port": 9000,
+        "bucket": "madrid-openmeteo-environment",
+        "path": "={{ $json.path }}",
+        "accessKeyId": "minioadmin",
+        "secretAccessKey": "minioadmin",
+        "ssl": false
+      },
+      "id": "UploadCurated",
+      "name": "Upload a file",
+      "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [200, 100]
+      "position": [1180, 240]
     }
   ],
   "connections": {
-    "Manual Trigger": {
-      "main": [[{ "node": "Ejecutar Analítica", "type": "main", "index": 0 }]]
+    "Schedule Trigger": {
+      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
     },
-    "Ejecutar Analítica": {
-      "main": [[{ "node": "Analítica OK?", "type": "main", "index": 0 }]]
+    "When clicking 'Execute workflow'": {
+      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
     },
-    "Analítica OK?": {
+    "Code in JavaScript": {
       "main": [
-        [{ "node": "Log success", "type": "main", "index": 0 }],
-        [{ "node": "Log error", "type": "main", "index": 0 }]
+        [
+          { "node": "Get many files", "type": "main", "index": 0 },
+          { "node": "Download Weather CSV", "type": "main", "index": 0 },
+          { "node": "Download Air CSV", "type": "main", "index": 0 }
+        ]
       ]
+    },
+    "Get many files": {
+      "main": [[{ "node": "Download a file", "type": "main", "index": 0 }]]
+    },
+    "Download Weather CSV": {
+      "main": [[{ "node": "Merge", "type": "main", "index": 0 }]]
+    },
+    "Download Air CSV": {
+      "main": [[{ "node": "Merge", "type": "main", "index": 1 }]]
+    },
+    "Merge": {
+      "main": [[{ "node": "Code in JavaScript1", "type": "main", "index": 0 }]]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          { "node": "Code in JavaScript2", "type": "main", "index": 0 },
+          { "node": "Code in JavaScript3", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [[{ "node": "Merge Curated", "type": "main", "index": 0 }]]
+    },
+    "Code in JavaScript3": {
+      "main": [[{ "node": "Merge Curated", "type": "main", "index": 1 }]]
+    },
+    "Merge Curated": {
+      "main": [[{ "node": "Convert to File", "type": "main", "index": 0 }]]
+    },
+    "Convert to File": {
+      "main": [[{ "node": "Upload a file", "type": "main", "index": 0 }]]
     }
   },
   "settings": { "executionOrder": "v1" },

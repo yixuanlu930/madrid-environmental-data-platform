@@ -6,148 +6,172 @@
     {
       "parameters": {
         "rule": {
-          "interval": [
-            {
-              "field": "days",
-              "triggerAtHour": 7,
-              "triggerAtMinute": 0
-            }
-          ]
+          "interval": [{ "field": "days", "triggerAtHour": 7, "triggerAtMinute": 0 }]
         }
       },
       "id": "ScheduleTrigger",
-      "name": "Daily Schedule 07:00",
+      "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [-600, -80]
+      "position": [-900, 0]
     },
     {
       "parameters": {},
       "id": "ManualTrigger",
-      "name": "Manual Trigger",
+      "name": "When clicking 'Execute workflow'",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [-600, 120]
+      "position": [-900, 200]
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://etl:8000/ingest",
-        "sendQuery": false,
-        "options": { "timeout": 120000 }
+        "jsCode": "// Calcula la fecha de ayer en Europe/Madrid\nconst now = new Date();\nconst madridDate = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Madrid' }).format(now);\nconst yesterday = new Date(madridDate);\nyesterday.setDate(yesterday.getDate() - 1);\nconst date = yesterday.toISOString().split('T')[0];\n\nreturn [{\n  json: {\n    date: date,\n    latitude: 40.4168,\n    longitude: -3.7038,\n    timezone: 'Europe/Madrid',\n    weatherUrl: `https://archive-api.open-meteo.com/v1/archive?latitude=40.4168&longitude=-3.7038&start_date=${date}&end_date=${date}&hourly=temperature_2m,precipitation&timezone=Europe%2FMadrid`,\n    airUrl: `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=40.4168&longitude=-3.7038&start_date=${date}&end_date=${date}&hourly=ozone,carbon_dioxide&timezone=Europe%2FMadrid`\n  }\n}];"
       },
-      "id": "RunIngest",
-      "name": "Ejecutar Ingesta",
+      "id": "BuildParams",
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-620, 100]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.weatherUrl }}",
+        "options": { "timeout": 60000 }
+      },
+      "id": "FetchWeather",
+      "name": "HTTP Request Weather",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-320, 20]
+      "position": [-340, -60]
     },
     {
       "parameters": {
-        "conditions": {
-          "options": { "caseSensitive": true, "typeValidation": "strict" },
-          "conditions": [
-            {
-              "id": "status-check",
-              "leftValue": "={{ $json.status }}",
-              "rightValue": "success",
-              "operator": { "type": "string", "operation": "equals" }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
+        "method": "GET",
+        "url": "={{ $('Code in JavaScript').item.json.airUrl }}",
+        "options": { "timeout": 60000 }
       },
-      "id": "CheckIngest",
-      "name": "Ingesta OK?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [-60, 20]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://etl:8000/analytics",
-        "sendQuery": false,
-        "options": { "timeout": 120000 }
-      },
-      "id": "TriggerAnalytics",
-      "name": "Lanzar Analítica",
+      "id": "FetchAir",
+      "name": "HTTP Request Air Quality",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [200, -80]
+      "position": [-340, 160]
     },
     {
       "parameters": {
-        "conditions": {
-          "options": { "caseSensitive": true, "typeValidation": "strict" },
-          "conditions": [
-            {
-              "id": "analytics-status-check",
-              "leftValue": "={{ $json.status }}",
-              "rightValue": "success",
-              "operator": { "type": "string", "operation": "equals" }
-            }
-          ],
-          "combinator": "and"
-        },
+        "mode": "combineBySql",
+        "numberInputs": 2
+      },
+      "id": "MergeAPIs",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [-60, 40]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Empaqueta las dos respuestas de API en un objeto con la fecha\nconst date = $('Code in JavaScript').item.json.date;\nconst weather = $input.all()[0].json;\nconst air = $input.all()[1].json;\n\nreturn [{\n  json: {\n    date: date,\n    weather: weather,\n    air_quality: air\n  }\n}];"
+      },
+      "id": "PackageData",
+      "name": "Code in JavaScript1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [180, 40]
+    },
+    {
+      "parameters": {
+        "sourceProperty": "=",
+        "fileName": "={{ 'raw_' + $('Code in JavaScript').item.json.date + '.json' }}",
+        "mimeType": "application/json",
+        "dataPropertyName": "data"
+      },
+      "id": "ConvertToFile",
+      "name": "Convert to File",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [420, -80]
+    },
+    {
+      "parameters": {
+        "protocol": "s3",
+        "host": "minio",
+        "port": 9000,
+        "bucket": "madrid-openmeteo-environment",
+        "path": "={{ 'raw/ingesta/date=' + $('Code in JavaScript').item.json.date + '/raw_' + $('Code in JavaScript').item.json.date + '.json' }}",
+        "accessKeyId": "minioadmin",
+        "secretAccessKey": "minioadmin",
+        "ssl": false
+      },
+      "id": "UploadRaw",
+      "name": "Upload a file",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [660, -80]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepara el mensaje para RabbitMQ con la fecha procesada\nconst date = $('Code in JavaScript').item.json.date;\nreturn [{\n  json: {\n    event: 'ingesta_completada',\n    date: date,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "BuildMessage",
+      "name": "Code in JavaScript2",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 180]
+    },
+    {
+      "parameters": {
+        "host": "rabbitmq",
+        "port": 5672,
+        "user": "admin",
+        "password": "admin",
+        "queue": "madrid.preprocesamiento",
+        "message": "={{ JSON.stringify($json) }}",
         "options": {}
       },
-      "id": "CheckAnalytics",
-      "name": "Analítica OK?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [440, -80]
-    },
-    {
-      "parameters": {},
-      "id": "LogSuccess",
-      "name": "Log success",
-      "type": "n8n-nodes-base.noOp",
+      "id": "PublishRabbitMQ",
+      "name": "RabbitMQ",
+      "type": "n8n-nodes-base.rabbitmq",
       "typeVersion": 1,
-      "position": [680, -180]
-    },
-    {
-      "parameters": {},
-      "id": "LogErrorAnalytics",
-      "name": "Log error analítica",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [680, 20]
-    },
-    {
-      "parameters": {},
-      "id": "LogErrorIngest",
-      "name": "Log error ingesta",
-      "type": "n8n-nodes-base.noOp",
-      "typeVersion": 1,
-      "position": [-60, 160]
+      "position": [660, 180]
     }
   ],
   "connections": {
-    "Daily Schedule 07:00": {
-      "main": [[{ "node": "Ejecutar Ingesta", "type": "main", "index": 0 }]]
+    "Schedule Trigger": {
+      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
     },
-    "Manual Trigger": {
-      "main": [[{ "node": "Ejecutar Ingesta", "type": "main", "index": 0 }]]
+    "When clicking 'Execute workflow'": {
+      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
     },
-    "Ejecutar Ingesta": {
-      "main": [[{ "node": "Ingesta OK?", "type": "main", "index": 0 }]]
-    },
-    "Ingesta OK?": {
+    "Code in JavaScript": {
       "main": [
-        [{ "node": "Lanzar Analítica", "type": "main", "index": 0 }],
-        [{ "node": "Log error ingesta", "type": "main", "index": 0 }]
+        [
+          { "node": "HTTP Request Weather", "type": "main", "index": 0 },
+          { "node": "HTTP Request Air Quality", "type": "main", "index": 0 }
+        ]
       ]
     },
-    "Lanzar Analítica": {
-      "main": [[{ "node": "Analítica OK?", "type": "main", "index": 0 }]]
+    "HTTP Request Weather": {
+      "main": [[{ "node": "Merge", "type": "main", "index": 0 }]]
     },
-    "Analítica OK?": {
+    "HTTP Request Air Quality": {
+      "main": [[{ "node": "Merge", "type": "main", "index": 1 }]]
+    },
+    "Merge": {
+      "main": [[{ "node": "Code in JavaScript1", "type": "main", "index": 0 }]]
+    },
+    "Code in JavaScript1": {
       "main": [
-        [{ "node": "Log success", "type": "main", "index": 0 }],
-        [{ "node": "Log error analítica", "type": "main", "index": 0 }]
+        [
+          { "node": "Convert to File", "type": "main", "index": 0 },
+          { "node": "Code in JavaScript2", "type": "main", "index": 0 }
+        ]
       ]
+    },
+    "Convert to File": {
+      "main": [[{ "node": "Upload a file", "type": "main", "index": 0 }]]
+    },
+    "Code in JavaScript2": {
+      "main": [[{ "node": "RabbitMQ", "type": "main", "index": 0 }]]
     }
   },
   "settings": { "executionOrder": "v1" },

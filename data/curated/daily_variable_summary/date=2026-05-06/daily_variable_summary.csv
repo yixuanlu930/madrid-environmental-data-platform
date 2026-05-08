@@ -1,5 +1,0 @@
-date,source,dataset,variable,unit,observations,min_value,avg_value,max_value
-2026-05-06,open_meteo,air_quality,carbon_dioxide,ppm,24,448.0,454.1667,463.0
-2026-05-06,open_meteo,air_quality,ozone,μg/m³,24,17.0,67.8333,106.0
-2026-05-06,open_meteo,historical_weather,precipitation,mm,24,0.0,0.0,0.0
-2026-05-06,open_meteo,historical_weather,temperature_2m,°C,24,7.5,14.1625,20.1
