@@ -16,8 +16,8 @@
       ],
       "credentials": {
         "rabbitmq": {
-          "id": "CLlVYg0ubIrrhlB6",
-          "name": "RabbitMQ account 2"
+          "id": "D3oqUhSY9y9HTByc",
+          "name": "RabbitMQ account"
         }
       }
     },
@@ -90,8 +90,8 @@
       "name": "Upload a file",
       "credentials": {
         "s3": {
-          "id": "pN1COipp7gzYPtMJ",
-          "name": "S3 account"
+          "id": "qGDH8h0N1oyPecQp",
+          "name": "S3 account 2"
         }
       }
     },
@@ -125,28 +125,8 @@
       "name": "Upload a file1",
       "credentials": {
         "s3": {
-          "id": "pN1COipp7gzYPtMJ",
-          "name": "S3 account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "queue": "madrid.analitica",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.rabbitmq",
-      "typeVersion": 1.1,
-      "position": [
-        144,
-        192
-      ],
-      "id": "2602f168-011b-4b26-8175-cddf863c3d61",
-      "name": "RabbitMQ",
-      "credentials": {
-        "rabbitmq": {
-          "id": "CLlVYg0ubIrrhlB6",
-          "name": "RabbitMQ account 2"
+          "id": "qGDH8h0N1oyPecQp",
+          "name": "S3 account 2"
         }
       }
     }
@@ -226,13 +206,7 @@
     },
     "Upload a file1": {
       "main": [
-        [
-          {
-            "node": "RabbitMQ",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        []
       ]
     }
   },
@@ -241,10 +215,10 @@
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "ced711c8-04f1-4eaf-8c3e-f54ef469e99f",
+  "versionId": "a3f4c1e5-7b46-47a5-b724-bfcc68c4c07d",
   "meta": {
     "templateCredsSetupCompleted": true,
-    "instanceId": "f0a5fd3a6c279fbb2c697c8c0d30357f09b0d7fbb268bee6dc0ca478c07edb11"
+    "instanceId": "d1bcf366892f218bea000535bd91fe810eac72cfe34bd994453ffa6cc1e540a8"
   },
   "id": "madrid_preprocesamiento",
   "tags": []
