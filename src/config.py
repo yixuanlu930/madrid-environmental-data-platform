@@ -36,6 +36,13 @@ class Settings:
 
     etl_port: int = int(os.getenv("ETL_PORT", "8000"))
 
+    # PostgreSQL – capa analítica (Día 2)
+    pg_host: str = os.getenv("POSTGRES_HOST", "postgres")
+    pg_port: int = int(os.getenv("POSTGRES_PORT", "5432"))
+    pg_db: str = os.getenv("POSTGRES_DB", "madrid_env")
+    pg_user: str = os.getenv("POSTGRES_USER", "madrid")
+    pg_password: str = os.getenv("POSTGRES_PASSWORD", "madrid")
+
     def __post_init__(self):
         object.__setattr__(self, "weather_hourly_variables", env_list("WEATHER_HOURLY_VARIABLES", "temperature_2m,precipitation"))
         object.__setattr__(self, "air_quality_hourly_variables", env_list("AIR_QUALITY_HOURLY_VARIABLES", "ozone,carbon_dioxide"))

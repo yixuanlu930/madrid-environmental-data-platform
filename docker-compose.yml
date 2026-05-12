@@ -1,4 +1,8 @@
 services:
+  # ─────────────────────────────────────────────
+  # DÍA 1 – Infraestructura de ingestión
+  # ─────────────────────────────────────────────
+
   minio:
     image: minio/minio:latest
     container_name: madrid-minio
@@ -71,20 +75,22 @@ services:
       MADRID_LATITUDE: ${MADRID_LATITUDE:-40.4168}
       MADRID_LONGITUDE: ${MADRID_LONGITUDE:--3.7038}
       TIMEZONE: ${TIMEZONE:-Europe/Madrid}
-
       HISTORICAL_WEATHER_URL: ${HISTORICAL_WEATHER_URL:-https://archive-api.open-meteo.com/v1/archive}
       AIR_QUALITY_URL: ${AIR_QUALITY_URL:-https://air-quality-api.open-meteo.com/v1/air-quality}
-
       WEATHER_HOURLY_VARIABLES: ${WEATHER_HOURLY_VARIABLES:-temperature_2m,precipitation}
       AIR_QUALITY_HOURLY_VARIABLES: ${AIR_QUALITY_HOURLY_VARIABLES:-ozone,carbon_dioxide}
-
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio:9000}
       MINIO_BUCKET: ${MINIO_BUCKET:-madrid-openmeteo-environment}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_SECURE: ${MINIO_SECURE:-false}
-
       ETL_PORT: ${ETL_PORT:-8000}
+      # PostgreSQL – capa analítica (Día 2)
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-madrid_env}
+      POSTGRES_USER: ${POSTGRES_USER:-madrid}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-madrid}
     ports:
       - "8000:8000"
     volumes:
@@ -94,6 +100,8 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
     networks:
       - madrid-data-net
     restart: unless-stopped
@@ -170,6 +178,12 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_SECURE: ${MINIO_SECURE:-false}
+      # PostgreSQL disponible también desde notebooks
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-madrid_env}
+      POSTGRES_USER: ${POSTGRES_USER:-madrid}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-madrid}
     ports:
       - "8890:8888"
     volumes:
@@ -180,14 +194,78 @@ services:
         condition: service_healthy
       etl:
         condition: service_started
+      postgres:
+        condition: service_healthy
     networks:
       - madrid-data-net
     restart: unless-stopped
+
+  # ─────────────────────────────────────────────
+  # DÍA 2 – Capa analítica: PostgreSQL + Superset
+  # ─────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16
+    container_name: madrid-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-madrid_env}
+      POSTGRES_USER: ${POSTGRES_USER:-madrid}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-madrid}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init_postgres.sql:/docker-entrypoint-initdb.d/init_postgres.sql:ro
+    networks:
+      - madrid-data-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-madrid} -d ${POSTGRES_DB:-madrid_env}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  superset:
+    image: apache/superset:3.1.0
+    container_name: madrid-superset
+    ports:
+      - "8088:8088"
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:-madrid_superset_secret_change_in_prod}
+      PYTHONPATH: /app/pythonpath
+    volumes:
+      - superset_home:/app/superset_home
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - madrid-data-net
+    restart: unless-stopped
+
+  superset-init:
+    image: apache/superset:3.1.0
+    container_name: madrid-superset-init
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:-madrid_superset_secret_change_in_prod}
+      PYTHONPATH: /app/pythonpath
+    volumes:
+      - superset_home:/app/superset_home
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+      - ./superset/superset_init.sh:/superset_init.sh:ro
+    entrypoint: ["/bin/bash", "/superset_init.sh"]
+    depends_on:
+      - superset
+    networks:
+      - madrid-data-net
 
 volumes:
   minio_data:
   n8n_data:
   rabbitmq_data:
+  postgres_data:
+  superset_home:
 
 networks:
   madrid-data-net:

@@ -1,0 +1,27 @@
+{
+  "stage": "analytics",
+  "status": "success",
+  "date": "2026-05-07",
+  "coordinates": {
+    "latitude": 40.4168,
+    "longitude": -3.7038,
+    "timezone": "Europe/Madrid"
+  },
+  "outputs": [
+    "/app/data/curated/hourly_environment_wide/date=2026-05-07/hourly_environment_wide.csv",
+    "/app/data/curated/daily_variable_summary/date=2026-05-07/daily_variable_summary.csv"
+  ],
+  "uploaded_to_minio": [
+    "daily_variable_summary/date=2026-05-07/daily_variable_summary.csv",
+    "hourly_environment_wide/date=2026-05-07/hourly_environment_wide.csv"
+  ],
+  "row_counts": {
+    "curated_hourly_wide": 24,
+    "curated_daily_summary": 4
+  },
+  "errors": [],
+  "loaded_to_postgres": {
+    "hourly_environment_wide": 24,
+    "daily_variable_summary": 4
+  }
+}
