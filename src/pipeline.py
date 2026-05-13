@@ -1,15 +1,18 @@
 from __future__ import annotations
 import argparse
+import csv
 import traceback
 from datetime import date, timedelta, datetime
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+
 from src.config import settings
 from src.sources import fetch_historical_weather, fetch_air_quality
-from src.storage import upload_pipeline_outputs
-from src.transform import payload_to_hourly_wide_rows, wide_rows_to_long_rows, build_analytics_hourly_table, build_daily_summary
-from src.utils import write_csv, write_json, read_json, read_csv
+from src.storage import get_minio_client, ensure_bucket, upload_pipeline_outputs
+from src.transform import payload_to_hourly_wide_rows, wide_rows_to_long_rows
+from src.utils import write_csv, write_json, read_json, safe_float
 from src.db_loader import load_observations_long, load_hourly_wide, load_daily_summary
 
 WEATHER_WIDE_FIELDS = ["source", "dataset", "date", "time", "latitude", "longitude", "temperature_2m", "temperature_2m_unit", "precipitation", "precipitation_unit"]
@@ -140,10 +143,8 @@ def run_preprocess(target_day: date | None = None) -> dict[str, Any]:
             "processed_long_observations": len(long_rows),
         }
 
-        # Carga en PostgreSQL (capa analítica – Día 2)
         pg_loaded = load_observations_long(long_rows, day)
         manifest["loaded_to_postgres"] = {"environment_observations_long": pg_loaded}
-
         manifest["status"] = "success"
 
     except Exception as exc:
@@ -162,8 +163,90 @@ def run_preprocess(target_day: date | None = None) -> dict[str, Any]:
 
 # ─────────────────────────────────────────────
 #  STAGE 3 — ANALÍTICA
-#  processed/ → curated/
+#  Lee el CSV curated generado por el workflow
+#  de n8n Analítica desde MinIO, lo pivota a
+#  formato wide, calcula resumen diario y carga
+#  en PostgreSQL para Superset.
 # ─────────────────────────────────────────────
+
+def _read_curated_from_minio(day: date) -> list[dict[str, Any]]:
+    """
+    Lee el CSV curated generado por el workflow n8n Analítica.
+    Ruta en MinIO: curated/daily_summary/YYYY/MM/DD/YYYY_MM_DD.csv
+    Formato: source,dataset,date,year,month,day,hour,time,latitude,longitude,variable,value,unit
+    """
+    year = day.strftime("%Y")
+    month = day.strftime("%m")
+    day_str = day.strftime("%d")
+    date_compact = day.strftime("%Y_%m_%d")
+    object_name = f"curated/daily_summary/{year}/{month}/{day_str}/{date_compact}.csv"
+
+    client = get_minio_client()
+    ensure_bucket(client)
+    response = client.get_object(settings.minio_bucket, object_name)
+    content = response.read().decode("utf-8")
+    reader = csv.DictReader(StringIO(content))
+    return list(reader)
+
+
+def _pivot_long_to_wide(long_rows: list[dict[str, Any]], day: date) -> list[dict[str, Any]]:
+    """
+    Convierte el formato largo (una fila por variable/hora) al formato wide
+    (una fila por hora con todas las variables como columnas).
+    Entrada:  source, dataset, date, year, month, day, hour, time, lat, lon, variable, value, unit
+    Salida:   date, time, latitude, longitude, temperature_2m, precipitation, ozone, carbon_dioxide
+    """
+    by_hour: dict[str, dict] = {}
+    for row in long_rows:
+        hour = row.get("hour", "")
+        time = row.get("time", "")
+        if hour not in by_hour:
+            by_hour[hour] = {
+                "date": day,
+                "time": time,
+                "latitude": safe_float(row.get("latitude")),
+                "longitude": safe_float(row.get("longitude")),
+                "temperature_2m": None,
+                "precipitation": None,
+                "ozone": None,
+                "carbon_dioxide": None,
+            }
+        variable = row.get("variable", "")
+        value = safe_float(row.get("value"))
+        if variable in ("temperature_2m", "precipitation", "ozone", "carbon_dioxide"):
+            by_hour[hour][variable] = value
+
+    return [by_hour[h] for h in sorted(by_hour.keys())]
+
+
+def _build_daily_summary_from_wide(wide_rows: list[dict[str, Any]], day: date) -> list[dict[str, Any]]:
+    """
+    Calcula el resumen diario (min, avg, max) por variable a partir de la tabla wide.
+    """
+    variables = [
+        ("temperature_2m", "open_meteo", "historical_weather", "°C"),
+        ("precipitation",  "open_meteo", "historical_weather", "mm"),
+        ("ozone",          "open_meteo", "air_quality",        "μg/m³"),
+        ("carbon_dioxide", "open_meteo", "air_quality",        "ppm"),
+    ]
+    summary = []
+    for var, source, dataset, unit in variables:
+        values = [r[var] for r in wide_rows if r.get(var) is not None]
+        if not values:
+            continue
+        summary.append({
+            "date": day.isoformat(),
+            "source": source,
+            "dataset": dataset,
+            "variable": var,
+            "unit": unit,
+            "observations": len(values),
+            "min_value": min(values),
+            "avg_value": sum(values) / len(values),
+            "max_value": max(values),
+        })
+    return summary
+
 
 def run_analytics(target_day: date | None = None) -> dict[str, Any]:
     day = target_day or madrid_yesterday()
@@ -172,42 +255,34 @@ def run_analytics(target_day: date | None = None) -> dict[str, Any]:
     manifest = _base_manifest("analytics", day_string)
 
     try:
-        raw_weather_path = data_dir / "raw" / "open_meteo_historical_weather" / f"date={day_string}" / "weather.json"
-        raw_air_path = data_dir / "raw" / "open_meteo_air_quality" / f"date={day_string}" / "air_quality.json"
+        # Lee el CSV curated generado por el workflow n8n Analítica desde MinIO
+        long_rows = _read_curated_from_minio(day)
+        manifest["row_counts"]["curated_long_from_minio"] = len(long_rows)
 
-        if not raw_weather_path.exists():
-            raise FileNotFoundError(f"Raw weather file not found: {raw_weather_path}. Run ingest first.")
-        if not raw_air_path.exists():
-            raise FileNotFoundError(f"Raw air quality file not found: {raw_air_path}. Run ingest first.")
+        # Pivota a formato wide (24 filas, una por hora)
+        wide_rows = _pivot_long_to_wide(long_rows, day)
 
-        weather_payload = read_json(raw_weather_path)
-        air_payload = read_json(raw_air_path)
-
-        weather_rows = payload_to_hourly_wide_rows(weather_payload, day, source="open_meteo", dataset="historical_weather", variables=settings.weather_hourly_variables)
-        air_rows = payload_to_hourly_wide_rows(air_payload, day, source="open_meteo", dataset="air_quality", variables=settings.air_quality_hourly_variables)
-        long_rows = (
-            wide_rows_to_long_rows(weather_rows, settings.weather_hourly_variables)
-            + wide_rows_to_long_rows(air_rows, settings.air_quality_hourly_variables)
-        )
-
-        analytics_rows = build_analytics_hourly_table(weather_rows, air_rows, day)
+        # Guarda la tabla wide en local y sube a MinIO
         curated_hourly_path = data_dir / "curated" / "hourly_environment_wide" / f"date={day_string}" / "hourly_environment_wide.csv"
-        write_csv(curated_hourly_path, analytics_rows, ANALYTICS_FIELDS)
+        write_csv(curated_hourly_path, wide_rows, ANALYTICS_FIELDS)
         manifest["outputs"].append(str(curated_hourly_path))
 
-        summary_rows = build_daily_summary(long_rows, day)
+        # Calcula resumen diario (min/avg/max por variable)
+        summary_rows = _build_daily_summary_from_wide(wide_rows, day)
+
+        # Guarda el resumen en local y sube a MinIO
         curated_summary_path = data_dir / "curated" / "daily_variable_summary" / f"date={day_string}" / "daily_variable_summary.csv"
         write_csv(curated_summary_path, summary_rows, SUMMARY_FIELDS)
         manifest["outputs"].append(str(curated_summary_path))
 
         manifest["uploaded_to_minio"] = upload_pipeline_outputs(data_dir / "curated", day_string)
-        manifest["row_counts"] = {
-            "curated_hourly_wide": len(analytics_rows),
+        manifest["row_counts"].update({
+            "curated_hourly_wide": len(wide_rows),
             "curated_daily_summary": len(summary_rows),
-        }
+        })
 
-        # Carga en PostgreSQL (capa analítica – Día 2)
-        pg_wide = load_hourly_wide(analytics_rows, day)
+        # Carga en PostgreSQL para Superset
+        pg_wide = load_hourly_wide(wide_rows, day)
         pg_summary = load_daily_summary(summary_rows)
         manifest["loaded_to_postgres"] = {
             "hourly_environment_wide": pg_wide,
@@ -260,6 +335,7 @@ def main() -> int:
         manifest = run_pipeline(day)
     print(manifest)
     return 0 if manifest.get("status") == "success" else 1
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
