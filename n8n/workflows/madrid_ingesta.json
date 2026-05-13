@@ -132,7 +132,7 @@
       ],
       "credentials": {
         "s3": {
-          "id": "pN1COipp7gzYPtMJ",
+          "id": "x6prTWZ53pyVMkQS",
           "name": "S3 account"
         }
       }
@@ -165,7 +165,7 @@
       ],
       "credentials": {
         "rabbitmq": {
-          "id": "vKJqd216F9wwwBZ7",
+          "id": "dNIROHdXvbB7oyY4",
           "name": "RabbitMQ account"
         }
       }

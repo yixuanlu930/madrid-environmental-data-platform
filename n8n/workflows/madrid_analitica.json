@@ -3,23 +3,13 @@
   "nodes": [
     {
       "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "triggerAtHour": 7,
-              "triggerAtMinute": 30
-            }
-          ]
-        }
+        "rule": { "interval": [{ "triggerAtHour": 8, "triggerAtMinute": 0 }] }
       },
       "id": "ScheduleTrigger",
       "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [
-        -352,
-        96
-      ]
+      "position": [-352, 96]
     },
     {
       "parameters": {},
@@ -27,185 +17,76 @@
       "name": "When clicking 'Execute workflow'",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [
-        -336,
-        352
-      ]
+      "position": [-352, 352]
     },
     {
       "parameters": {
-        "jsCode": "const now = new Date();\nconst madridDate = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Madrid' }).format(now);\nconst yesterday = new Date(madridDate);\nyesterday.setDate(yesterday.getDate() - 1);\nconst date = yesterday.toISOString().split('T')[0];\n\nreturn [{ json: { date } }];"
+        "mode": "runOnceForAllItems",
+        "jsCode": "const now = new Date();\nconst madridDate = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Madrid' }).format(now);\nconst yesterday = new Date(madridDate);\nyesterday.setDate(yesterday.getDate() - 1);\nconst date = yesterday.toISOString().split('T')[0];\nconst parts = date.split('-');\nconst year = parts[0];\nconst month = parts[1];\nconst day = parts[2];\n\n// Genera 24 items, uno por hora, con la URL de descarga de cada fichero\nconst items = [];\nfor (let i = 0; i < 24; i++) {\n  const hourStr = String(i).padStart(2, '0');\n  const dateCompact = date.replace(/-/g, '');\n  const fileName = hourStr + '_' + dateCompact + '.csv';\n  const url = 'http://minio:9000/madrid-openmeteo-environment/processed/environment_observations_long/' + year + '/' + month + '/' + day + '/' + fileName;\n  items.push({\n    json: { date: date, year: year, month: month, day: day, hour: hourStr, fileName: fileName, url: url }\n  });\n}\nreturn items;"
       },
-      "id": "BuildDate",
-      "name": "Code in JavaScript",
+      "id": "BuildUrls",
+      "name": "Build Download URLs",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        -128,
-        240
-      ]
+      "position": [-80, 240]
     },
     {
       "parameters": {
-        "jsCode": "const date = $('Code in JavaScript').item.json.date;\nconst text = $input.item.json.data;\n\nconst lines = text.trim().split('\\n');\nconst headers = lines[0].split(',');\nconst rows = lines.slice(1).map(line => {\n  const vals = line.split(',');\n  return Object.fromEntries(headers.map((h, i) => [h, vals[i] ?? '']));\n});\n\n// Agrupa por hora → tabla wide (24 filas)\nconst byHour = {};\nrows.forEach(r => {\n  if (!byHour[r.hour]) {\n    byHour[r.hour] = {\n      date: r.date, year: r.year, month: r.month,\n      day: r.day, hour: r.hour, time: r.time,\n      latitude: r.latitude, longitude: r.longitude\n    };\n  }\n  byHour[r.hour][r.variable] = r.value;\n});\n\nconst wideRows = Object.values(byHour)\n  .sort((a, b) => a.hour.localeCompare(b.hour));\n\nreturn [{ json: { date, wideRows } }];"
+        "url": "={{ $json.url }}",
+        "options": { "timeout": 30000 }
       },
-      "id": "BuildCurated",
-      "name": "Code in JavaScript1",
+      "id": "DownloadCSV",
+      "name": "Download CSV from MinIO",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [160, 240]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Recibe 24 items (uno por hora) con el contenido CSV de cada fichero\n// Los une en un único CSV curated\nconst allItems = $input.all();\nconst first = $('Build Download URLs').first().json;\nconst date = first.date;\nconst year = first.year;\nconst month = first.month;\nconst day = first.day;\n\nlet header = '';\nconst dataRows = [];\n\nfor (const item of allItems) {\n  // El HTTP Request devuelve el contenido en item.json.data o como texto\n  let csvText = '';\n  if (typeof item.json === 'string') {\n    csvText = item.json;\n  } else if (item.json.data) {\n    csvText = item.json.data;\n  } else {\n    // Intentar convertir el objeto a CSV\n    csvText = JSON.stringify(item.json);\n  }\n\n  const lines = csvText.trim().split('\\n');\n  if (lines.length < 2) continue;\n  if (!header) header = lines[0];\n  for (let i = 1; i < lines.length; i++) {\n    if (lines[i].trim()) dataRows.push(lines[i]);\n  }\n}\n\n// Ordena por hora (columna hour, posicion 6)\ndataRows.sort(function(a, b) {\n  const ha = a.split(',')[6] || '00';\n  const hb = b.split(',')[6] || '00';\n  return ha.localeCompare(hb);\n});\n\nconst curatedCsv = header + '\\n' + dataRows.join('\\n');\nconst curatedFileName = year + '_' + month + '_' + day + '.csv';\nconst curatedPath = 'curated/daily_summary/' + year + '/' + month + '/' + day + '/' + curatedFileName;\n\nreturn [{\n  json: { date: date, year: year, month: month, day: day, curatedPath: curatedPath, curatedFileName: curatedFileName, totalRows: dataRows.length },\n  binary: {\n    data: {\n      data: Buffer.from(curatedCsv).toString('base64'),\n      mimeType: 'text/csv',\n      fileName: curatedFileName\n    }\n  }\n}];"
+      },
+      "id": "MergeAndBuild",
+      "name": "Merge and Build Curated",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        272,
-        240
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const { date, wideRows } = $input.item.json;\n\nreturn [{\n  json: {\n    date,\n    rows: wideRows,\n    path: `curated/hourly_environment_wide/date=${date}/hourly_environment_wide_${date}.csv`\n  }\n}];"
-      },
-      "id": "BuildSummaryCSV",
-      "name": "Code in JavaScript3",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        560,
-        240
-      ]
-    },
-    {
-      "parameters": {
-        "options": {}
-      },
-      "id": "ConvertToFile",
-      "name": "Convert to File",
-      "type": "n8n-nodes-base.convertToFile",
-      "typeVersion": 1.1,
-      "position": [
-        944,
-        240
-      ]
+      "position": [400, 240]
     },
     {
       "parameters": {
         "operation": "upload",
-        "bucketName": "=madrid-openmeteo-environment",
-        "fileName": "=={{ 'curated/hourly_environment_wide/date=' + $json.date + '/hourly_environment_wide_' + $json.date + '.csv' }}",
+        "bucketName": "madrid-openmeteo-environment",
+        "fileName": "={{ $json.curatedPath }}",
         "additionalFields": {}
       },
       "id": "UploadCurated",
-      "name": "Upload a file",
+      "name": "Upload Curated to MinIO",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [
-        1184,
-        240
-      ],
-      "credentials": {
-        "s3": {
-          "id": "pN1COipp7gzYPtMJ",
-          "name": "S3 account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "url": "=http://minio:9000/madrid-openmeteo-environment/=processed/environment_observations_long/date=undefined/environment_observations_long_undefined.csv",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.4,
-      "position": [
-        48,
-        240
-      ],
-      "id": "6d9116f8-06b6-489b-ae2c-9d9b1aebd804",
-      "name": "HTTP Request"
+      "position": [640, 240],
+      "credentials": { "s3": { "id": "x6prTWZ53pyVMkQS", "name": "S3 account" } }
     }
   ],
   "pinData": {},
   "connections": {
     "Schedule Trigger": {
-      "main": [
-        [
-          {
-            "node": "Code in JavaScript",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Build Download URLs", "type": "main", "index": 0 }]]
     },
     "When clicking 'Execute workflow'": {
-      "main": [
-        [
-          {
-            "node": "Code in JavaScript",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Build Download URLs", "type": "main", "index": 0 }]]
     },
-    "Code in JavaScript": {
-      "main": [
-        [
-          {
-            "node": "HTTP Request",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Build Download URLs": {
+      "main": [[{ "node": "Download CSV from MinIO", "type": "main", "index": 0 }]]
     },
-    "Code in JavaScript1": {
-      "main": [
-        [
-          {
-            "node": "Code in JavaScript3",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Download CSV from MinIO": {
+      "main": [[{ "node": "Merge and Build Curated", "type": "main", "index": 0 }]]
     },
-    "Code in JavaScript3": {
-      "main": [
-        [
-          {
-            "node": "Convert to File",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Convert to File": {
-      "main": [
-        [
-          {
-            "node": "Upload a file",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HTTP Request": {
-      "main": [
-        [
-          {
-            "node": "Code in JavaScript1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Merge and Build Curated": {
+      "main": [[{ "node": "Upload Curated to MinIO", "type": "main", "index": 0 }]]
     }
   },
   "active": false,
-  "settings": {
-    "executionOrder": "v1",
-    "binaryMode": "separate"
-  },
+  "settings": { "executionOrder": "v1", "binaryMode": "separate" },
   "versionId": "00c2e34b-ad2f-42ad-925c-960eb061885b",
   "meta": {
     "templateCredsSetupCompleted": true,

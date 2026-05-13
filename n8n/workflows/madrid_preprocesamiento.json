@@ -10,211 +10,93 @@
       "name": "RabbitMQ Trigger",
       "type": "n8n-nodes-base.rabbitmqTrigger",
       "typeVersion": 1,
-      "position": [
-        -896,
-        112
-      ],
+      "position": [-896, 112],
       "credentials": {
-        "rabbitmq": {
-          "id": "D3oqUhSY9y9HTByc",
-          "name": "RabbitMQ account"
-        }
+        "rabbitmq": { "id": "dNIROHdXvbB7oyY4", "name": "RabbitMQ account" }
       }
     },
     {
       "parameters": {
-        "jsCode": "const raw = $input.item.json;\nconst content = typeof raw.content === 'string' ? raw.content : JSON.stringify(raw.content);\nconst msg = JSON.parse(content.trim());\nconst date = msg.date;\nconst records = msg.records;\n\nconst result = [];\nfor (const r of records) {\n  const dt = new Date(r.time);\n  result.push({\n    json: {\n      date: r.date,\n      time: r.time,\n      hour: String(dt.getHours()).padStart(2, '0'),\n      year: String(dt.getFullYear()),\n      month: String(dt.getMonth() + 1).padStart(2, '0'),\n      day: String(dt.getDate()).padStart(2, '0'),\n      date_partition: `date=${date}`,\n      latitude: Number(r.latitude),\n      longitude: Number(r.longitude),\n      temperature_2m: r.temperature_2m,\n      temperature_2m_unit: r.temperature_2m_unit,\n      precipitation: r.precipitation,\n      precipitation_unit: r.precipitation_unit,\n      ozone: r.ozone,\n      ozone_unit: r.ozone_unit,\n      carbon_dioxide: r.carbon_dioxide,\n      carbon_dioxide_unit: r.carbon_dioxide_unit\n    }\n  });\n}\n\nreturn result;"
+        "mode": "runOnceForAllItems",
+        "jsCode": "const raw = $input.item.json;\nconst content = typeof raw.content === 'string' ? raw.content : JSON.stringify(raw.content);\nconst msg = JSON.parse(content.trim());\nconst date = msg.date;\nconst parts = date.split('-');\nconst year = parts[0];\nconst month = parts[1];\nconst day = parts[2];\nconst records = msg.records;\n\nreturn records.map(function(r) {\n  return {\n    json: {\n      date: date,\n      year: year,\n      month: month,\n      day: day,\n      hour: r.hour,\n      hourStr: String(r.hour).padStart(2, '0'),\n      time: r.time,\n      latitude: Number(r.latitude),\n      longitude: Number(r.longitude),\n      temperature_2m: r.temperature_2m,\n      temperature_2m_unit: r.temperature_2m_unit,\n      precipitation: r.precipitation,\n      precipitation_unit: r.precipitation_unit,\n      ozone: r.ozone,\n      ozone_unit: r.ozone_unit,\n      carbon_dioxide: r.carbon_dioxide,\n      carbon_dioxide_unit: r.carbon_dioxide_unit\n    }\n  };\n});"
       },
       "id": "ParseMessage",
       "name": "Code in JavaScript",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        -688,
-        112
-      ]
+      "position": [-640, 112]
     },
     {
       "parameters": {
-        "jsCode": "const items = $input.all().map(i => i.json);\nconst date = items[0].date;\n\nconst longRows = [];\nitems.forEach(r => {\n  [\n    {var: 'temperature_2m', unit: r.temperature_2m_unit, ds: 'historical_weather'},\n    {var: 'precipitation',  unit: r.precipitation_unit,  ds: 'historical_weather'},\n    {var: 'ozone',          unit: r.ozone_unit,          ds: 'air_quality'},\n    {var: 'carbon_dioxide', unit: r.carbon_dioxide_unit, ds: 'air_quality'}\n  ].forEach(v => {\n    longRows.push({\n      source: 'open_meteo', dataset: v.ds,\n      date: r.date, year: r.year, month: r.month,\n      day: r.day, hour: r.hour, time: r.time,\n      latitude: r.latitude, longitude: r.longitude,\n      variable: v.var, value: r[v.var], unit: v.unit\n    });\n  });\n});\n\nreturn [{\n  json: {\n    date,\n    rows: longRows,\n    path: `processed/environment_observations_long/date=${date}/environment_observations_long_${date}.csv`,\n    type: 'processed'\n  }\n}];"
+        "mode": "runOnceForEachItem",
+        "jsCode": "const r = $input.item.json;\nconst dateCompact = r.date.replace(/-/g, '');\nconst hourStr = r.hourStr;\nconst fileName = hourStr + '_' + dateCompact + '.csv';\nconst path = 'clean/environment_clean/' + r.year + '/' + r.month + '/' + r.day + '/' + fileName;\n\nconst fields = ['date','year','month','day','hour','time','latitude','longitude','temperature_2m','temperature_2m_unit','precipitation','precipitation_unit','ozone','ozone_unit','carbon_dioxide','carbon_dioxide_unit'];\n\nconst header = fields.join(',');\nconst row = fields.map(function(f) { return r[f] !== undefined && r[f] !== null ? r[f] : ''; }).join(',');\nconst csvContent = header + '\\n' + row;\n\nreturn {\n  json: { date: r.date, year: r.year, month: r.month, day: r.day, hourStr: hourStr, path: path, fileName: fileName },\n  binary: {\n    data: {\n      data: Buffer.from(csvContent).toString('base64'),\n      mimeType: 'text/csv',\n      fileName: fileName\n    }\n  }\n};"
       },
+      "id": "BuildClean",
+      "name": "Build Clean CSV",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        -480,
-        0
-      ],
-      "id": "f8987487-9794-4df2-a6f3-b60b370f2c7b",
-      "name": "Code in JavaScript1"
+      "position": [-384, -32]
     },
     {
       "parameters": {
-        "jsCode": "const items = $input.all().map(i => i.json);\nconst date = items[0].date;\n\nconst fields = [\n  'date','year','month','day','hour','time','latitude','longitude',\n  'temperature_2m','temperature_2m_unit','precipitation','precipitation_unit',\n  'ozone','ozone_unit','carbon_dioxide','carbon_dioxide_unit'\n];\n\nreturn [{\n  json: {\n    date,\n    rows: items,\n    path: `clean/environment_clean/date=${date}/environment_clean_${date}.csv`,\n    type: 'clean'\n  }\n}];"
+        "mode": "runOnceForEachItem",
+        "jsCode": "const r = $input.item.json;\nconst dateCompact = r.date.replace(/-/g, '');\nconst hourStr = r.hourStr;\nconst fileName = hourStr + '_' + dateCompact + '.csv';\nconst path = 'processed/environment_observations_long/' + r.year + '/' + r.month + '/' + r.day + '/' + fileName;\n\nconst variables = [\n  { variable: 'temperature_2m', unit: r.temperature_2m_unit, value: r.temperature_2m, dataset: 'historical_weather' },\n  { variable: 'precipitation', unit: r.precipitation_unit, value: r.precipitation, dataset: 'historical_weather' },\n  { variable: 'ozone', unit: r.ozone_unit, value: r.ozone, dataset: 'air_quality' },\n  { variable: 'carbon_dioxide', unit: r.carbon_dioxide_unit, value: r.carbon_dioxide, dataset: 'air_quality' }\n];\n\nconst header = 'source,dataset,date,year,month,day,hour,time,latitude,longitude,variable,value,unit';\nconst rows = variables.map(function(v) {\n  const val = v.value !== undefined && v.value !== null ? v.value : '';\n  return 'open_meteo,' + v.dataset + ',' + r.date + ',' + r.year + ',' + r.month + ',' + r.day + ',' + hourStr + ',' + r.time + ',' + r.latitude + ',' + r.longitude + ',' + v.variable + ',' + val + ',' + v.unit;\n});\nconst csvContent = header + '\\n' + rows.join('\\n');\n\nreturn {\n  json: { date: r.date, year: r.year, month: r.month, day: r.day, hourStr: hourStr, path: path, fileName: fileName },\n  binary: {\n    data: {\n      data: Buffer.from(csvContent).toString('base64'),\n      mimeType: 'text/csv',\n      fileName: fileName\n    }\n  }\n};"
       },
+      "id": "BuildProcessed",
+      "name": "Build Processed CSV",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        -480,
-        192
-      ],
-      "id": "ec3ed42e-5f6d-430a-82c1-f02b695593a7",
-      "name": "Code in JavaScript2"
-    },
-    {
-      "parameters": {
-        "options": {}
-      },
-      "type": "n8n-nodes-base.convertToFile",
-      "typeVersion": 1.1,
-      "position": [
-        -272,
-        0
-      ],
-      "id": "05eee995-2fb8-4e2b-9e55-edc8d11252a7",
-      "name": "Convert to File"
+      "position": [-384, 256]
     },
     {
       "parameters": {
         "operation": "upload",
         "bucketName": "madrid-openmeteo-environment",
-        "fileName": "=={{ 'clean/environment_clean/date=' + $json.date + '/environment_clean_' + $json.date + '.csv' }}",
+        "fileName": "={{ $json.path }}",
         "additionalFields": {}
       },
+      "id": "UploadClean",
+      "name": "Upload Clean",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [
-        -64,
-        0
-      ],
-      "id": "c50dd346-9bb1-439a-ab94-ff1aaa18a0b0",
-      "name": "Upload a file",
-      "credentials": {
-        "s3": {
-          "id": "qGDH8h0N1oyPecQp",
-          "name": "S3 account 2"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "options": {}
-      },
-      "type": "n8n-nodes-base.convertToFile",
-      "typeVersion": 1.1,
-      "position": [
-        -272,
-        192
-      ],
-      "id": "eaa04a10-5238-4fb3-920b-5376740eea3b",
-      "name": "Convert to File1"
+      "position": [-144, -32],
+      "credentials": { "s3": { "id": "x6prTWZ53pyVMkQS", "name": "S3 account" } }
     },
     {
       "parameters": {
         "operation": "upload",
         "bucketName": "madrid-openmeteo-environment",
-        "fileName": "=={{ 'processed/environment_observations_long/date=' + $json.date + '/environment_observations_long_' + $json.date + '.csv' }}",
+        "fileName": "={{ $json.path }}",
         "additionalFields": {}
       },
+      "id": "UploadProcessed",
+      "name": "Upload Processed",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [
-        -64,
-        192
-      ],
-      "id": "11cee272-9ba4-4693-9543-64e53e38718c",
-      "name": "Upload a file1",
-      "credentials": {
-        "s3": {
-          "id": "qGDH8h0N1oyPecQp",
-          "name": "S3 account 2"
-        }
-      }
+      "position": [-144, 256],
+      "credentials": { "s3": { "id": "x6prTWZ53pyVMkQS", "name": "S3 account" } }
     }
   ],
   "pinData": {},
   "connections": {
     "RabbitMQ Trigger": {
-      "main": [
-        [
-          {
-            "node": "Code in JavaScript",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
     },
     "Code in JavaScript": {
-      "main": [
-        [
-          {
-            "node": "Code in JavaScript1",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Code in JavaScript2",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[
+        { "node": "Build Clean CSV", "type": "main", "index": 0 },
+        { "node": "Build Processed CSV", "type": "main", "index": 0 }
+      ]]
     },
-    "Code in JavaScript1": {
-      "main": [
-        [
-          {
-            "node": "Convert to File",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Build Clean CSV": {
+      "main": [[{ "node": "Upload Clean", "type": "main", "index": 0 }]]
     },
-    "Convert to File": {
-      "main": [
-        [
-          {
-            "node": "Upload a file",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code in JavaScript2": {
-      "main": [
-        [
-          {
-            "node": "Convert to File1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Convert to File1": {
-      "main": [
-        [
-          {
-            "node": "Upload a file1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Upload a file1": {
-      "main": [
-        []
-      ]
+    "Build Processed CSV": {
+      "main": [[{ "node": "Upload Processed", "type": "main", "index": 0 }]]
     }
   },
   "active": false,
-  "settings": {
-    "executionOrder": "v1",
-    "binaryMode": "separate"
-  },
+  "settings": { "executionOrder": "v1", "binaryMode": "separate" },
   "versionId": "a3f4c1e5-7b46-47a5-b724-bfcc68c4c07d",
   "meta": {
     "templateCredsSetupCompleted": true,

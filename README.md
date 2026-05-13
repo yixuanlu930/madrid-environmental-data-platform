@@ -1,16 +1,15 @@
 # Práctica 2 — Infraestructura Big Data ambiental para Madrid
 
-Infraestructura de datos para analizar variables ambientales de Madrid usando dos APIs de Open-Meteo, orquestada con n8n, almacenada en MinIO, consultable mediante PostgreSQL y visualizable desde Apache Superset y Jupyter Lab.
+Infraestructura de datos para analizar variables ambientales de Madrid usando dos APIs de Open-Meteo, orquestada con **n8n**, almacenada en **MinIO** (Data Lake por capas), con colas de mensajes en **RabbitMQ**, consultable mediante **PostgreSQL** y visualizable desde **Apache Superset** y **Jupyter Lab**.
 
 ---
 
 ## 1. Objetivo
 
-La infraestructura recupera datos horarios del **día anterior** para Madrid, los almacena sin pérdida en un Data Lake por capas (raw → clean → processed → curated), los carga en una base de datos relacional para consultas SQL, y produce tablas optimizadas para análisis y dashboards.
+La infraestructura recupera datos horarios del **día anterior** para Madrid, los almacena en un Data Lake organizado por capas y fechas (raw → clean → processed → curated), y produce tablas agregadas optimizadas para análisis.
 
 Coordenadas usadas:
-
-```text
+```
 latitude  = 40.4168
 longitude = -3.7038
 timezone  = Europe/Madrid
@@ -25,119 +24,106 @@ timezone  = Europe/Madrid
 | Historical Weather API | `https://archive-api.open-meteo.com/v1/archive` | `temperature_2m`, `precipitation` |
 | Air Quality API | `https://air-quality-api.open-meteo.com/v1/air-quality` | `ozone`, `carbon_dioxide` |
 
-Cada API se consulta para el día anterior con resolución horaria. La salida esperada es:
-
-- 24 filas horarias de meteorología
-- 24 filas horarias de calidad del aire
-- 96 observaciones en formato largo (24h × 4 variables)
-- 24 filas en la tabla analítica final
+Cada API se consulta para el día anterior con resolución horaria (24 registros por variable).
 
 ---
 
 ## 3. Arquitectura
 
-```text
-n8n (orquestador)
-  │
-  │  POST /ingest → /preprocess → /analytics  (diario a las 07:00 Europe/Madrid)
-  ▼
-Servicio ETL Python (servidor HTTP interno)
-  ├── Stage 1 /ingest:      Llama a las APIs → guarda RAW JSON → MinIO
-  ├── Stage 2 /preprocess:  RAW → CLEAN CSV + PROCESSED (long) → MinIO + PostgreSQL
-  └── Stage 3 /analytics:   RAW → CURATED (wide + resumen) → MinIO + PostgreSQL
-  │
-  │  Doble escritura: SDK MinIO  +  psycopg2 → PostgreSQL
-  ▼
-┌─────────────────────┐     ┌──────────────────────────────────┐
-│   MinIO Data Lake   │     │         PostgreSQL               │
-│   (compatible S3)   │     │   esquema: madrid_environment    │
-│                     │     │                                  │
-│  raw/               │     │  environment_observations_long   │
-│  clean/             │     │  hourly_environment_wide         │
-│  processed/         │     │  daily_variable_summary          │
-│  curated/           │     │                                  │
-└─────────────────────┘     └──────────────────┬───────────────┘
-         ▲                                      │ SQL
-         │                                      ▼
-    Jupyter Lab                         Apache Superset
-  (análisis Python)                   (dashboards BI)
+```
+                    ┌─────────────────────────────────────┐
+                    │         n8n (orquestador)            │
+                    │                                     │
+                    │  Madrid 1 - Ingesta  (07:00)        │
+                    │  Madrid 2 - Preprocesamiento        │
+                    │  Madrid 3 - Analítica   (08:00)     │
+                    └──────────────┬──────────────────────┘
+                                   │
+              ┌────────────────────┼────────────────────┐
+              │                    │                    │
+              ▼                    ▼                    ▼
+      Open-Meteo APIs        RabbitMQ               MinIO
+    (Weather + Air Quality)  (cola mensajes)     (Data Lake S3)
 ```
 
-> El nodo n8n **no llama directamente** a las APIs de Open-Meteo. Delega toda la lógica al servicio ETL Python, que hace las llamadas, las transformaciones y la carga tanto en MinIO como en PostgreSQL.
+### Flujo de datos
+
+```
+Ingesta ──→ llama a 2 APIs ──→ guarda JSON RAW en MinIO
+        ──→ publica 1 mensaje en RabbitMQ (con 24 registros horarios)
+
+Preprocesamiento ──→ consume mensaje de RabbitMQ
+                 ──→ genera 24 CSVs clean  (YYYY/MM/DD/HH_YYYYMMDD.csv)
+                 ──→ genera 24 CSVs processed en formato largo
+                 ──→ sube todos a MinIO
+
+Analítica ──→ descarga los 24 CSVs processed del día anterior
+          ──→ los une en un único CSV curated con todas las medidas
+          ──→ sube el CSV curated a MinIO
+```
 
 ---
 
-## 4. Componentes
+## 4. Estructura del Data Lake en MinIO
 
-| Componente | Imagen / Build | Función |
+```
+madrid-openmeteo-environment/
+│
+├── raw/
+│   ├── open_meteo_historical_weather/
+│   │   └── YYYY/MM/DD/
+│   │       └── weather_YYYY-MM-DD.json        ← respuesta original de la API
+│   └── open_meteo_air_quality/
+│       └── YYYY/MM/DD/
+│           └── air_quality_YYYY-MM-DD.json    ← respuesta original de la API
+│
+├── clean/
+│   └── environment_clean/
+│       └── YYYY/MM/DD/
+│           ├── 00_YYYYMMDD.csv                ← hora 00 (1 fila, campos seleccionados)
+│           ├── 01_YYYYMMDD.csv
+│           └── ...  (24 ficheros por día)
+│
+├── processed/
+│   └── environment_observations_long/
+│       └── YYYY/MM/DD/
+│           ├── 00_YYYYMMDD.csv                ← hora 00 (4 filas, formato largo)
+│           └── ...  (24 ficheros por día)
+│
+└── curated/
+    └── daily_summary/
+        └── YYYY/MM/DD/
+            └── YYYY_MM_DD.csv                 ← todas las medidas del día (96 filas)
+```
+
+---
+
+## 5. Componentes
+
+| Componente | Imagen | Función |
 |---|---|---|
 | `minio` | `minio/minio:latest` | Data Lake persistente tipo S3 |
 | `minio-init` | `minio/mc:latest` | Crea el bucket al arrancar |
-| `rabbitmq` | `rabbitmq:3-management` | Cola de mensajes entre servicios |
-| `etl` | Build local (`Dockerfile`) | Ingesta, transformación y carga |
-| `n8n` | `n8nio/n8n:latest` | Orquestación del flujo periódico |
-| `n8n-init` | `n8nio/n8n:latest` | Importa los workflows automáticamente |
-| `jupyter` | Build local (`Dockerfile`) | Entorno de análisis Python |
-| `postgres` | `postgres:16` | Base de datos relacional para consultas SQL |
+| `rabbitmq` | `rabbitmq:3-management` | Cola de mensajes entre Ingesta y Preprocesamiento |
+| `n8n` | `n8nio/n8n:latest` | Orquestación de los tres workflows |
+| `n8n-init` | `n8nio/n8n:latest` | Importa los workflows automáticamente al arrancar |
+| `postgres` | `postgres:16` | Base de datos relacional |
 | `superset` | `apache/superset:3.1.0` | Dashboards e interfaz BI |
-| `superset-init` | `apache/superset:3.1.0` | Inicialización del admin de Superset |
-| Red `madrid-data-net` | bridge | Comunicación interna entre servicios |
+| `jupyter` | Build local | Entorno de análisis Python |
 
 ---
 
-## 5. Estructura del Data Lake
-
-```text
-data/
-├── raw/                              ← JSON originales, sin modificar
-│   ├── open_meteo_historical_weather/
-│   │   └── date=YYYY-MM-DD/weather.json
-│   └── open_meteo_air_quality/
-│       └── date=YYYY-MM-DD/air_quality.json
-├── clean/                            ← CSV limpios, una tabla por API (24 filas)
-│   ├── historical_weather_hourly/
-│   │   └── date=YYYY-MM-DD/weather_hourly.csv
-│   └── air_quality_hourly/
-│       └── date=YYYY-MM-DD/air_quality_hourly.csv
-├── processed/                        ← Tabla larga unificada (96 filas) + manifests
-│   ├── environment_observations_long/
-│   │   └── date=YYYY-MM-DD/environment_observations_long.csv
-│   └── manifests/
-│       └── date=YYYY-MM-DD/manifest.json
-└── curated/                          ← Tablas optimizadas para análisis
-    ├── hourly_environment_wide/      ← 24 filas, todas las variables en columnas
-    │   └── date=YYYY-MM-DD/hourly_environment_wide.csv
-    └── daily_variable_summary/       ← 4 filas, estadísticas min/avg/max por variable
-        └── date=YYYY-MM-DD/daily_variable_summary.csv
-```
-
-Todos los archivos siguen particionado Hive (`date=YYYY-MM-DD`) para facilitar consultas por fecha.
-
----
-
-## 6. Esquema en PostgreSQL
-
-Las zonas processed y curated se cargan automáticamente en el esquema `madrid_environment`:
-
-| Tabla | Origen | Descripción |
-|---|---|---|
-| `environment_observations_long` | processed | 96 filas/día, una por variable/hora. Útil para filtros por variable |
-| `hourly_environment_wide` | curated | 24 filas/día, todas las variables en columnas. Óptima para series temporales |
-| `daily_variable_summary` | curated | 4 filas/día, estadísticas min/avg/max por variable. Principal tabla para dashboards |
-
----
-
-## 7. Puesta en marcha
+## 6. Puesta en marcha
 
 ### Prerrequisitos
 
 - Docker y Docker Compose instalados
-- Puertos libres: 8000, 5432, 5672, 5678, 8088, 8890, 9000, 9001, 15672
+- Puertos libres: 5432, 5672, 5678, 8088, 8890, 9000, 9001, 15672
 
 ### Paso 1 — Configuración del entorno
 
 ```bash
-cp env.example .env
+cp .env.example .env
 ```
 
 Los valores por defecto funcionan sin ningún cambio adicional.
@@ -145,22 +131,105 @@ Los valores por defecto funcionan sin ningún cambio adicional.
 ### Paso 2 — Arrancar los servicios
 
 ```bash
-docker compose up --build
+docker compose up -d
 ```
 
-Al arrancar ocurre lo siguiente de forma automática:
-
-1. MinIO, RabbitMQ y PostgreSQL inician (con healthcheck)
-2. `minio-init` espera a que MinIO esté sano y crea el bucket
-3. El servicio ETL arranca cuando MinIO y PostgreSQL están listos
-4. n8n arranca y `n8n-init` importa los tres workflows automáticamente
-5. Superset arranca y `superset-init` crea el usuario administrador
-
-Verifica que todos los servicios están en marcha:
+Verifica que todos los contenedores están corriendo:
 
 ```bash
 docker compose ps
 ```
+
+Espera a que MinIO, RabbitMQ y PostgreSQL aparezcan como `healthy` (puede tardar 1-2 minutos).
+
+### Paso 3 — Importar los workflows en n8n
+
+```bash
+docker exec madrid-n8n n8n import:workflow --input=/workflows/madrid_ingesta.json
+docker exec madrid-n8n n8n import:workflow --input=/workflows/madrid_preprocesamiento.json
+docker exec madrid-n8n n8n import:workflow --input=/workflows/madrid_analitica.json
+```
+
+### Paso 4 — Configurar credenciales en n8n
+
+Abre **http://localhost:5678/credentials** y crea las siguientes credenciales:
+
+**S3 account** (MinIO):
+- Type: S3
+- Region: `us-east-1`
+- Access Key ID: `minioadmin`
+- Secret Access Key: `minioadmin`
+- Endpoint: `http://minio:9000`
+- Force path style: `true`
+
+**RabbitMQ account**:
+- Type: RabbitMQ
+- Hostname: `rabbitmq`
+- Port: `5672`
+- Username: `admin`
+- Password: `admin`
+
+### Paso 5 — Crear la cola en RabbitMQ
+
+Abre **http://localhost:15672** (admin/admin) → pestaña **Queues** → **Add a new queue**:
+- Name: `madrid.preprocesamiento`
+- El resto por defecto → **Add queue**
+
+### Paso 6 — Actualizar IDs de credenciales en los workflows
+
+Obtén los IDs de las credenciales que acabas de crear:
+
+```bash
+docker exec madrid-n8n n8n export:credentials --all
+```
+
+Anota el `id` de cada credencial y actualiza los workflows (sustituye `<ID_S3>` y `<ID_RABBITMQ>` por los valores reales):
+
+```bash
+# Actualizar ID de S3 en todos los workflows
+sed -i 's/pN1COipp7gzYPtMJ/<ID_S3>/g' n8n/workflows/madrid_ingesta.json
+sed -i 's/pN1COipp7gzYPtMJ/<ID_S3>/g' n8n/workflows/madrid_analitica.json
+sed -i 's/qGDH8h0N1oyPecQp/<ID_S3>/g' n8n/workflows/madrid_preprocesamiento.json
+
+# Actualizar ID de RabbitMQ
+sed -i 's/vKJqd216F9wwwBZ7/<ID_RABBITMQ>/g' n8n/workflows/madrid_ingesta.json
+sed -i 's/D3oqUhSY9y9HTByc/<ID_RABBITMQ>/g' n8n/workflows/madrid_preprocesamiento.json
+
+# Reimportar los workflows actualizados
+docker exec madrid-n8n n8n import:workflow --input=/workflows/madrid_ingesta.json
+docker exec madrid-n8n n8n import:workflow --input=/workflows/madrid_preprocesamiento.json
+docker exec madrid-n8n n8n import:workflow --input=/workflows/madrid_analitica.json
+```
+
+---
+
+## 7. Ejecución del pipeline
+
+Ejecuta los workflows en este orden desde **http://localhost:5678**:
+
+### 1. Madrid 1 - Ingesta
+- Abre el workflow → botón **Execute workflow**
+- Llama a las dos APIs de Open-Meteo
+- Guarda los JSONs originales en MinIO (`raw/`)
+- Publica 1 mensaje en RabbitMQ con los 24 registros horarios
+
+**Verificar:** En RabbitMQ (http://localhost:15672) → Queues → `madrid.preprocesamiento` debe mostrar **1 mensaje**.
+
+### 2. Madrid 2 - Preprocesamiento
+- Abre el workflow → botón **Execute workflow**
+- Consume el mensaje de RabbitMQ
+- Genera 24 ficheros CSV clean y 24 processed (uno por hora)
+- Los sube a MinIO con la estructura `YYYY/MM/DD/HH_YYYYMMDD.csv`
+
+**Verificar:** En MinIO (http://localhost:9001 — minioadmin/minioadmin) deben aparecer 24 ficheros en `clean/environment_clean/YYYY/MM/DD/` y otros 24 en `processed/environment_observations_long/YYYY/MM/DD/`.
+
+### 3. Madrid 3 - Analítica
+- Abre el workflow → botón **Execute workflow**
+- Descarga los 24 CSVs processed del día anterior
+- Los une en un único CSV curated (96 filas: 24h × 4 variables)
+- Sube el CSV a MinIO
+
+**Verificar:** En MinIO debe aparecer el fichero `curated/daily_summary/YYYY/MM/DD/YYYY_MM_DD.csv` con 97 líneas (1 cabecera + 96 datos).
 
 ---
 
@@ -168,150 +237,46 @@ docker compose ps
 
 | Servicio | URL | Credenciales |
 |---|---|---|
-| ETL healthcheck | `http://localhost:8000/health` | — |
-| n8n | `http://localhost:5678` | (ninguna por defecto) |
-| MinIO Console | `http://localhost:9001` | `minioadmin / minioadmin` |
-| RabbitMQ Management | `http://localhost:15672` | `admin / admin` |
-| Jupyter Lab | `http://localhost:8890` | (sin token) |
-| PostgreSQL | `localhost:5432` | `madrid / madrid` |
-| Superset | `http://localhost:8088` | `admin / admin` |
+| n8n | http://localhost:5678 | (ninguna por defecto) |
+| MinIO Console | http://localhost:9001 | `minioadmin / minioadmin` |
+| RabbitMQ Management | http://localhost:15672 | `admin / admin` |
+| Jupyter Lab | http://localhost:8890 | (sin token) |
+| PostgreSQL | localhost:5432 | `madrid / madrid` |
+| Superset | http://localhost:8088 | `admin / admin` |
 
 ---
 
-## 9. Ejecutar el pipeline manualmente
+## 9. Workflows n8n
 
-Por defecto recupera el día anterior según la zona horaria `Europe/Madrid`.
-
-Los tres stages en secuencia:
-
-```bash
-curl -X POST "http://localhost:8000/ingest"
-curl -X POST "http://localhost:8000/preprocess"
-curl -X POST "http://localhost:8000/analytics"
-```
-
-O todo en una sola llamada:
-
-```bash
-curl -X POST "http://localhost:8000/run"
-```
-
-Para una fecha concreta:
-
-```bash
-curl -X POST "http://localhost:8000/run?date=2026-05-05"
-```
-
-También puedes lanzarlo desde n8n con el botón **Test workflow** en la interfaz.
+| Workflow | Trigger | Descripción |
+|---|---|---|
+| `Madrid 1 - Ingesta` | Schedule 07:00 / manual | Llama a APIs, guarda RAW, publica en RabbitMQ |
+| `Madrid 2 - Preprocesamiento` | RabbitMQ Trigger / manual | Genera 24 CSVs clean y 24 processed por día |
+| `Madrid 3 - Analítica` | Schedule 08:00 / manual | Agrupa los 24 CSVs en un único curated diario |
 
 ---
 
-## 10. Validación de outputs
-
-```bash
-docker compose exec etl python src/validate_outputs.py --date 2026-05-05
-```
-
-Salida esperada (todos los checks en `[OK]`):
-
-```text
-Validating Madrid Open-Meteo outputs for date=2026-05-05
-[OK] /app/data/raw/open_meteo_historical_weather/date=2026-05-05/weather.json
-[OK] /app/data/raw/open_meteo_air_quality/date=2026-05-05/air_quality.json
-[OK] /app/data/clean/historical_weather_hourly/date=2026-05-05/weather_hourly.csv rows=24
-[OK] /app/data/clean/air_quality_hourly/date=2026-05-05/air_quality_hourly.csv rows=24
-[OK] /app/data/processed/environment_observations_long/date=2026-05-05/environment_observations_long.csv rows=96
-[OK] /app/data/curated/hourly_environment_wide/date=2026-05-05/hourly_environment_wide.csv rows=24
-[OK] /app/data/curated/daily_variable_summary/date=2026-05-05/daily_variable_summary.csv rows=4
-[OK] /app/data/processed/manifests/date=2026-05-05/manifest.json
-```
-
----
-
-## 11. n8n — workflows
-
-Se importan automáticamente al arrancar gracias al servicio `n8n-init`. Hay tres workflows encadenados:
-
-| Workflow | Descripción |
-|---|---|
-| `madrid_ingesta` | Llama a `/ingest` — descarga las APIs y guarda los JSON en raw/ |
-| `madrid_preprocesamiento` | Llama a `/preprocess` — genera clean/ y processed/, carga en PostgreSQL |
-| `madrid_analitica` | Llama a `/analytics` — genera curated/, carga en PostgreSQL |
-
-Cada workflow se ejecuta diariamente a las 07:00 (Europe/Madrid) y puede lanzarse a mano desde la UI de n8n.
-
----
-
-## 12. Configurar Superset
-
-1. Acceder a `http://localhost:8088` — usuario `admin`, contraseña `admin`
-2. Ir a **Settings → Database Connections → + Database**
-3. Seleccionar **PostgreSQL**
-4. Introducir la cadena de conexión:
-   ```
-   postgresql://madrid:madrid@postgres:5432/madrid_env
-   ```
-5. **Test Connection** → debe aparecer en verde → Guardar
-
-### Crear datasets
-
-1. **Data → Datasets → + Dataset**
-2. Seleccionar la base de datos PostgreSQL, esquema `madrid_environment`
-3. Empezar por `daily_variable_summary` para dashboards de alto nivel
-4. Usar `hourly_environment_wide` para gráficos de series temporales
-
-### Consultas SQL de ejemplo (SQL Lab o psql)
-
-```sql
--- Temperatura media por día
-SELECT date, avg_value AS temperatura_media_c
-FROM madrid_environment.daily_variable_summary
-WHERE variable = 'temperature_2m'
-ORDER BY date;
-
--- Serie horaria de ozono y CO2
-SELECT time, ozone, carbon_dioxide
-FROM madrid_environment.hourly_environment_wide
-ORDER BY time;
-
--- Días con mayor concentración de ozono
-SELECT date, max_value AS ozono_max
-FROM madrid_environment.daily_variable_summary
-WHERE variable = 'ozone'
-ORDER BY max_value DESC
-LIMIT 10;
-```
-
----
-
-## 13. Notebook de análisis (Jupyter)
-
-Abre `http://localhost:8890`. El notebook está en:
-
-```text
-notebooks/analyze_curated_data.ipynb
-```
-
-Lee directamente desde MinIO usando el endpoint interno `minio:9000`. También puede conectarse a PostgreSQL usando las variables de entorno `POSTGRES_*` disponibles en el contenedor.
-
----
-
-## 14. Comandos útiles
+## 10. Comandos útiles
 
 ```bash
 # Ver estado de los servicios
 docker compose ps
 
 # Ver logs en tiempo real
-docker compose logs -f etl
 docker compose logs -f n8n
-docker compose logs -f superset
+docker compose logs -f rabbitmq
 
-# Ejecutar pipeline para una fecha específica (dentro del contenedor)
-docker compose exec etl python src/pipeline.py --date 2026-05-05
+# Listar ficheros generados en MinIO
+docker exec madrid-minio mc ls --recursive local/madrid-openmeteo-environment/
 
-# Conectarse a PostgreSQL
-docker exec -it madrid-postgres psql -U madrid -d madrid_env
+# Listar ficheros por zona
+docker exec madrid-minio mc ls --recursive local/madrid-openmeteo-environment/raw/
+docker exec madrid-minio mc ls --recursive local/madrid-openmeteo-environment/clean/
+docker exec madrid-minio mc ls --recursive local/madrid-openmeteo-environment/processed/
+docker exec madrid-minio mc ls --recursive local/madrid-openmeteo-environment/curated/
+
+# Ver contenido de un fichero CSV en MinIO
+docker exec madrid-minio mc cat "local/madrid-openmeteo-environment/curated/daily_summary/YYYY/MM/DD/YYYY_MM_DD.csv"
 
 # Parar servicios (conserva volúmenes y datos)
 docker compose down
@@ -322,41 +287,32 @@ docker compose down -v
 
 ---
 
-## 15. Estructura del repositorio
+## 11. Estructura del repositorio
 
-```text
+```
 .
-├── docker-compose.yml        # Definición de todos los servicios
-├── Dockerfile                # Imagen compartida por etl y jupyter
-├── requirements.txt          # Dependencias Python
-├── env.example               # Plantilla de variables de entorno (copiar a .env)
-├── .env                      # Variables de entorno activas (NO subir a git)
-├── src/
-│   ├── config.py             # Configuración centralizada desde variables de entorno
-│   ├── sources.py            # Llamadas HTTP a las APIs de Open-Meteo
-│   ├── transform.py          # Transformaciones raw → clean → processed → curated
-│   ├── storage.py            # Carga de archivos en MinIO
-│   ├── db_loader.py          # Carga de datos en PostgreSQL
-│   ├── pipeline.py           # Orquestación del flujo (3 stages)
-│   ├── server.py             # Servidor HTTP (/ingest /preprocess /analytics /run /health)
-│   ├── utils.py              # Utilidades (escritura CSV/JSON, listado de ficheros)
-│   └── validate_outputs.py   # Validación de los outputs generados
+├── docker-compose.yml                # Definición de todos los servicios
+├── Dockerfile                        # Imagen compartida por etl y jupyter
+├── requirements.txt                  # Dependencias Python
+├── .env.example                      # Plantilla de variables de entorno
+├── .env                              # Variables de entorno activas (NO subir a git)
 ├── n8n/workflows/
 │   ├── madrid_ingesta.json           # Workflow de ingesta
 │   ├── madrid_preprocesamiento.json  # Workflow de preprocesamiento
 │   └── madrid_analitica.json         # Workflow de analítica
 ├── postgres/
-│   └── init_postgres.sql     # DDL del esquema analítico (se ejecuta al crear el contenedor)
+│   └── init_postgres.sql             # DDL del esquema
 ├── superset/
-│   ├── superset_config.py    # Configuración de Superset
-│   └── superset_init.sh      # Script de inicialización del admin
+│   ├── superset_config.py
+│   └── superset_init.sh
 ├── notebooks/
-│   └── analyze_curated_data.ipynb    # Notebook de análisis desde MinIO
-├── data/                     # Data Lake local (espejo del bucket MinIO)
+│   └── analyze_curated_data.ipynb   # Notebook de análisis
+├── data/                            # Data Lake local
 │   ├── raw/
 │   ├── clean/
 │   ├── processed/
 │   └── curated/
 └── docs/
-    ├── ARCHITECTURE.md       # Descripción técnica de la arquitectura (Día 1)
-    └── ARCHITECTURE_DIA2.md  # Extensión analítica (Día 2)
+    ├── ARCHITECTURE.md
+    └── ARCHITECTURE_DIA2.md
+```
