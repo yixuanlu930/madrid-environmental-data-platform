@@ -10,21 +10,29 @@
       "name": "RabbitMQ Trigger",
       "type": "n8n-nodes-base.rabbitmqTrigger",
       "typeVersion": 1,
-      "position": [-896, 112],
+      "position": [
+        -896,
+        112
+      ],
       "credentials": {
-        "rabbitmq": { "id": "dNIROHdXvbB7oyY4", "name": "RabbitMQ account" }
+        "rabbitmq": {
+          "id": "t0b9aJxbdBSJw1b9",
+          "name": "RabbitMQ account 2"
+        }
       }
     },
     {
       "parameters": {
-        "mode": "runOnceForAllItems",
         "jsCode": "const raw = $input.item.json;\nconst content = typeof raw.content === 'string' ? raw.content : JSON.stringify(raw.content);\nconst msg = JSON.parse(content.trim());\nconst date = msg.date;\nconst parts = date.split('-');\nconst year = parts[0];\nconst month = parts[1];\nconst day = parts[2];\nconst records = msg.records;\n\nreturn records.map(function(r) {\n  return {\n    json: {\n      date: date,\n      year: year,\n      month: month,\n      day: day,\n      hour: r.hour,\n      hourStr: String(r.hour).padStart(2, '0'),\n      time: r.time,\n      latitude: Number(r.latitude),\n      longitude: Number(r.longitude),\n      temperature_2m: r.temperature_2m,\n      temperature_2m_unit: r.temperature_2m_unit,\n      precipitation: r.precipitation,\n      precipitation_unit: r.precipitation_unit,\n      ozone: r.ozone,\n      ozone_unit: r.ozone_unit,\n      carbon_dioxide: r.carbon_dioxide,\n      carbon_dioxide_unit: r.carbon_dioxide_unit\n    }\n  };\n});"
       },
       "id": "ParseMessage",
       "name": "Code in JavaScript",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-640, 112]
+      "position": [
+        -640,
+        112
+      ]
     },
     {
       "parameters": {
@@ -35,7 +43,10 @@
       "name": "Build Clean CSV",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-384, -32]
+      "position": [
+        -384,
+        -32
+      ]
     },
     {
       "parameters": {
@@ -46,7 +57,10 @@
       "name": "Build Processed CSV",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-384, 256]
+      "position": [
+        -384,
+        256
+      ]
     },
     {
       "parameters": {
@@ -59,8 +73,16 @@
       "name": "Upload Clean",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [-144, -32],
-      "credentials": { "s3": { "id": "x6prTWZ53pyVMkQS", "name": "S3 account" } }
+      "position": [
+        -144,
+        -32
+      ],
+      "credentials": {
+        "s3": {
+          "id": "QAnDVqx8l4eDIMkV",
+          "name": "S3 account 2"
+        }
+      }
     },
     {
       "parameters": {
@@ -73,34 +95,79 @@
       "name": "Upload Processed",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [-144, 256],
-      "credentials": { "s3": { "id": "x6prTWZ53pyVMkQS", "name": "S3 account" } }
+      "position": [
+        -144,
+        256
+      ],
+      "credentials": {
+        "s3": {
+          "id": "QAnDVqx8l4eDIMkV",
+          "name": "S3 account 2"
+        }
+      }
     }
   ],
   "pinData": {},
   "connections": {
     "RabbitMQ Trigger": {
-      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Code in JavaScript": {
-      "main": [[
-        { "node": "Build Clean CSV", "type": "main", "index": 0 },
-        { "node": "Build Processed CSV", "type": "main", "index": 0 }
-      ]]
+      "main": [
+        [
+          {
+            "node": "Build Clean CSV",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Processed CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Build Clean CSV": {
-      "main": [[{ "node": "Upload Clean", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Upload Clean",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Build Processed CSV": {
-      "main": [[{ "node": "Upload Processed", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Upload Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "active": false,
-  "settings": { "executionOrder": "v1", "binaryMode": "separate" },
-  "versionId": "a3f4c1e5-7b46-47a5-b724-bfcc68c4c07d",
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "ab0ead13-8b92-4800-8f71-04413fc84d9c",
   "meta": {
     "templateCredsSetupCompleted": true,
-    "instanceId": "d1bcf366892f218bea000535bd91fe810eac72cfe34bd994453ffa6cc1e540a8"
+    "instanceId": "0c2540c92cee3b33660f61d088d9925e595be6e3926a802a5625732e08cb4799"
   },
   "id": "madrid_preprocesamiento",
   "tags": []

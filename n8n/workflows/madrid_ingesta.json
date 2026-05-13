@@ -119,7 +119,7 @@
       "parameters": {
         "operation": "upload",
         "bucketName": "madrid-openmeteo-environment",
-        "fileName": "=={{ 'raw/ingesta/date=' + $('Code in JavaScript').item.json.date + '/raw_' + $('Code in JavaScript').item.json.date + '.json' }}",
+        "fileName": "={{ 'raw/ingesta/date=' + $('Code in JavaScript').item.json.date + '/raw_' + $('Code in JavaScript').item.json.date + '.json' }}",
         "additionalFields": {}
       },
       "id": "UploadRaw",
@@ -132,8 +132,8 @@
       ],
       "credentials": {
         "s3": {
-          "id": "x6prTWZ53pyVMkQS",
-          "name": "S3 account"
+          "id": "QAnDVqx8l4eDIMkV",
+          "name": "S3 account 2"
         }
       }
     },
@@ -165,8 +165,8 @@
       ],
       "credentials": {
         "rabbitmq": {
-          "id": "dNIROHdXvbB7oyY4",
-          "name": "RabbitMQ account"
+          "id": "t0b9aJxbdBSJw1b9",
+          "name": "RabbitMQ account 2"
         }
       }
     },
@@ -312,10 +312,10 @@
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "32f76c7a-690c-4d60-ba0b-8efe3ad23fe2",
+  "versionId": "899970a4-ee71-4833-aa62-1a5c233b08b1",
   "meta": {
     "templateCredsSetupCompleted": true,
-    "instanceId": "f0a5fd3a6c279fbb2c697c8c0d30357f09b0d7fbb268bee6dc0ca478c07edb11"
+    "instanceId": "0c2540c92cee3b33660f61d088d9925e595be6e3926a802a5625732e08cb4799"
   },
   "id": "madrid_ingesta",
   "tags": []
