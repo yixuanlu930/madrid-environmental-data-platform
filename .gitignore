@@ -194,3 +194,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Editor history
+.history/
+
+# R
+.Rhistory
+.RData
