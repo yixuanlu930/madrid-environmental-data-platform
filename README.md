@@ -1,4 +1,796 @@
-# Práctica 2 — Infraestructura Big Data ambiental para Madrid
+# Madrid Environmental Data Platform
+
+An end-to-end **environmental data engineering platform for Madrid** that automatically ingests weather and air-quality data, processes it through a layered Data Lake, loads analytical datasets into PostgreSQL, and exposes them through Jupyter Lab and Apache Superset.
+
+The platform combines **Python, Open-Meteo, MinIO, n8n, RabbitMQ, PostgreSQL, Apache Superset, Jupyter, and Docker Compose** in a reproducible Big Data infrastructure.
+
+## Overview
+
+The objective of the project is to build a complete data pipeline capable of retrieving environmental information for Madrid, transforming it into analysis-ready datasets, storing it in multiple formats, and exposing it to both technical and non-technical users.
+
+The system retrieves hourly data for the previous day using two Open-Meteo APIs:
+
+* Historical Weather API
+* Air Quality API
+
+The data is processed through four Data Lake layers:
+
+```text
+RAW → CLEAN → PROCESSED → CURATED
+```
+
+The final datasets are also loaded into PostgreSQL for SQL analysis and visualization through Apache Superset.
+
+---
+
+## Architecture
+
+```text
+                ┌──────────────────────────┐
+                │      Open-Meteo APIs     │
+                │                          │
+                │ Historical Weather       │
+                │ Air Quality              │
+                └────────────┬─────────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │       n8n       │
+                    │  Orchestration  │
+                    └────────┬────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │   Python ETL    │
+                    │    Service      │
+                    └───────┬─────────┘
+                            │
+              ┌─────────────┴─────────────┐
+              │                           │
+              ▼                           ▼
+     ┌──────────────────┐       ┌──────────────────┐
+     │      MinIO       │       │    PostgreSQL    │
+     │    Data Lake     │       │ Analytical Layer │
+     │                  │       │                  │
+     │ raw              │       │ Long table       │
+     │ clean            │       │ Hourly wide      │
+     │ processed        │       │ Daily summary    │
+     │ curated          │       │                  │
+     └────────┬─────────┘       └────────┬─────────┘
+              │                          │
+              ▼                          ▼
+        ┌────────────┐             ┌───────────────┐
+        │  Jupyter   │             │    Superset   │
+        │    Lab     │             │      BI       │
+        └────────────┘             └───────────────┘
+
+              RabbitMQ
+                  │
+                  ▼
+       Event-based communication
+```
+
+All services run inside the same Docker network.
+
+---
+
+## Data Sources
+
+The platform uses two Open-Meteo APIs.
+
+### Historical Weather API
+
+Variables:
+
+```text
+temperature_2m
+precipitation
+```
+
+### Air Quality API
+
+Variables:
+
+```text
+ozone
+carbon_dioxide
+```
+
+The default geographic configuration corresponds to Madrid:
+
+```text
+Latitude:  40.4168
+Longitude: -3.7038
+Timezone:  Europe/Madrid
+```
+
+The pipeline retrieves data with hourly resolution.
+
+For each day, the expected output includes:
+
+```text
+24 weather observations
+24 air-quality observations
+96 long-format observations
+24 rows in the analytical wide table
+4 daily variable summaries
+```
+
+---
+
+# Data Lake Architecture
+
+MinIO provides an S3-compatible Data Lake organized into four logical layers.
+
+```text
+madrid-openmeteo-environment/
+│
+├── raw/
+│
+├── clean/
+│
+├── processed/
+│
+└── curated/
+```
+
+## RAW
+
+Stores the original API responses without modification.
+
+Example:
+
+```text
+raw/
+├── open_meteo_historical_weather/
+│   └── date=YYYY-MM-DD/
+│       └── weather.json
+│
+└── open_meteo_air_quality/
+    └── date=YYYY-MM-DD/
+        └── air_quality.json
+```
+
+The RAW layer preserves the original source data and makes the pipeline reproducible.
+
+---
+
+## CLEAN
+
+Stores normalized hourly CSV datasets.
+
+```text
+clean/
+├── historical_weather_hourly/
+│   └── date=YYYY-MM-DD/
+│       └── weather_hourly.csv
+│
+└── air_quality_hourly/
+    └── date=YYYY-MM-DD/
+        └── air_quality_hourly.csv
+```
+
+Each dataset contains approximately:
+
+```text
+24 rows/day
+```
+
+---
+
+## PROCESSED
+
+The two sources are unified into a long analytical format.
+
+```text
+processed/
+└── environment_observations_long/
+    └── date=YYYY-MM-DD/
+        └── environment_observations_long.csv
+```
+
+Each row represents:
+
+```text
+one variable
+×
+one hour
+```
+
+With four monitored variables and 24 hours:
+
+```text
+24 × 4 = 96 observations/day
+```
+
+The project also generates processing manifests that record pipeline execution and output information.
+
+---
+
+## CURATED
+
+The curated layer contains datasets optimized for analysis.
+
+### Hourly Wide Table
+
+```text
+curated/
+└── hourly_environment_wide/
+    └── date=YYYY-MM-DD/
+        └── hourly_environment_wide.csv
+```
+
+The table contains one row per hour with columns such as:
+
+```text
+time
+temperature_2m
+precipitation
+ozone
+carbon_dioxide
+```
+
+### Daily Variable Summary
+
+```text
+curated/
+└── daily_variable_summary/
+    └── date=YYYY-MM-DD/
+        └── daily_variable_summary.csv
+```
+
+For each variable, the system calculates:
+
+* Number of observations
+* Minimum
+* Average
+* Maximum
+
+---
+
+# Hive-Style Partitioning
+
+Datasets are organized using date-based partitions such as:
+
+```text
+date=2026-05-12
+```
+
+This organization improves maintainability and makes it easier to query or process data by date.
+
+---
+
+# ETL Pipeline
+
+The Python ETL service contains three main stages.
+
+## Stage 1 — Ingestion
+
+The ingestion process:
+
+1. Calls the Open-Meteo Historical Weather API.
+2. Calls the Open-Meteo Air Quality API.
+3. Retrieves hourly environmental data.
+4. Preserves the raw JSON responses.
+5. Stores the results in MinIO.
+
+Endpoint:
+
+```http
+POST /ingest
+```
+
+---
+
+## Stage 2 — Preprocessing
+
+The preprocessing stage:
+
+1. Reads RAW data.
+2. Converts API responses into normalized CSV files.
+3. Builds clean weather and air-quality datasets.
+4. Converts the data into a unified long representation.
+5. Stores CLEAN and PROCESSED data in MinIO.
+6. Loads processed observations into PostgreSQL.
+
+Endpoint:
+
+```http
+POST /preprocess
+```
+
+---
+
+## Stage 3 — Analytics
+
+The analytical stage:
+
+1. Reads curated intermediate data.
+2. Converts long-format observations into a wide table.
+3. Calculates daily summary statistics.
+4. Stores CURATED datasets in MinIO.
+5. Loads analytical datasets into PostgreSQL.
+
+Endpoint:
+
+```http
+POST /analytics
+```
+
+---
+
+## Full Pipeline
+
+All stages can also be executed sequentially:
+
+```http
+POST /run
+```
+
+---
+
+# PostgreSQL Analytical Layer
+
+The PostgreSQL database uses the schema:
+
+```text
+madrid_environment
+```
+
+It contains three analytical tables.
+
+## `environment_observations_long`
+
+Long-format environmental observations.
+
+Typical volume:
+
+```text
+96 rows/day
+```
+
+Useful for:
+
+* Variable filtering
+* Exploratory analysis
+* Flexible aggregations
+
+---
+
+## `hourly_environment_wide`
+
+Wide analytical table containing:
+
+```text
+temperature_2m
+precipitation
+ozone
+carbon_dioxide
+```
+
+Typical volume:
+
+```text
+24 rows/day
+```
+
+This table is optimized for time-series analysis.
+
+---
+
+## `daily_variable_summary`
+
+Contains daily statistics for every environmental variable.
+
+Fields include:
+
+```text
+date
+source
+dataset
+variable
+unit
+observations
+min_value
+avg_value
+max_value
+```
+
+This table is particularly suitable for BI dashboards.
+
+---
+
+# Workflow Orchestration with n8n
+
+The project includes three n8n workflows:
+
+```text
+madrid_ingesta
+madrid_preprocesamiento
+madrid_analitica
+```
+
+They are stored in:
+
+```text
+n8n/workflows/
+```
+
+n8n is responsible for orchestrating the different stages of the environmental data pipeline.
+
+The workflows can be imported automatically when the infrastructure starts.
+
+---
+
+# RabbitMQ
+
+RabbitMQ is included as the message broker for event-driven communication between components.
+
+The management interface can be used to inspect:
+
+* Queues
+* Messages
+* Connections
+* Exchanges
+
+RabbitMQ provides a foundation for decoupling pipeline stages and supporting more scalable asynchronous processing.
+
+---
+
+# Apache Superset
+
+Apache Superset provides the Business Intelligence layer.
+
+It connects directly to PostgreSQL and can be used to create dashboards for:
+
+* Environmental trends
+* Daily averages
+* Maximum and minimum values
+* Air-quality evolution
+* Temperature analysis
+* Precipitation analysis
+
+This allows non-technical users to explore the processed datasets through interactive dashboards.
+
+---
+
+# Jupyter Lab
+
+Jupyter Lab is included for exploratory data analysis.
+
+The repository contains:
+
+```text
+notebooks/analyze_curated_data.ipynb
+```
+
+The notebook can:
+
+* Read curated data
+* Access MinIO
+* Query PostgreSQL
+* Analyze time series
+* Study correlations between environmental variables
+* Produce exploratory visualizations
+
+---
+
+# Infrastructure Components
+
+| Component       | Purpose                      |
+| --------------- | ---------------------------- |
+| Open-Meteo      | Environmental data source    |
+| Python ETL      | Ingestion and transformation |
+| MinIO           | S3-compatible Data Lake      |
+| n8n             | Workflow orchestration       |
+| RabbitMQ        | Message broker               |
+| PostgreSQL      | Analytical SQL database      |
+| Apache Superset | BI dashboards                |
+| Jupyter Lab     | Exploratory data analysis    |
+| Docker          | Containerization             |
+| Docker Compose  | Multi-service orchestration  |
+
+---
+
+# Project Structure
+
+```text
+madrid-environmental-data-platform/
+│
+├── src/
+│   ├── server.py
+│   ├── pipeline.py
+│   ├── transform.py
+│   ├── sources.py
+│   ├── storage.py
+│   ├── db_loader.py
+│   ├── validate_outputs.py
+│   ├── config.py
+│   └── utils.py
+│
+├── n8n/
+│   └── workflows/
+│       ├── madrid_ingesta.json
+│       ├── madrid_preprocesamiento.json
+│       └── madrid_analitica.json
+│
+├── postgres/
+│   └── init_postgres.sql
+│
+├── superset/
+│   ├── superset_config.py
+│   └── superset_init.sh
+│
+├── notebooks/
+│   └── analyze_curated_data.ipynb
+│
+├── data/
+│   ├── raw/
+│   ├── clean/
+│   ├── processed/
+│   └── curated/
+│
+├── docs/
+│   ├── ARCHITECTURE.md
+│   └── ARCHITECTURE_DIA2.md
+│
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── .env.example
+├── .gitignore
+└── README.md
+```
+
+---
+
+# Running the Platform
+
+## Requirements
+
+Install:
+
+* Docker
+* Docker Compose
+
+Clone the repository:
+
+```bash
+git clone https://github.com/YOUR_USERNAME/madrid-environmental-data-platform.git
+cd madrid-environmental-data-platform
+```
+
+---
+
+## Configure Environment Variables
+
+Create the local environment file:
+
+```bash
+cp .env.example .env
+```
+
+The default development configuration contains settings for:
+
+* Madrid coordinates
+* Open-Meteo endpoints
+* MinIO
+* RabbitMQ
+* PostgreSQL
+* Superset
+
+Never commit `.env` files containing production credentials.
+
+---
+
+## Start the Infrastructure
+
+Run:
+
+```bash
+docker compose up --build
+```
+
+To run in the background:
+
+```bash
+docker compose up --build -d
+```
+
+Check all services:
+
+```bash
+docker compose ps
+```
+
+---
+
+# Service URLs
+
+| Service             | URL                      |
+| ------------------- | ------------------------ |
+| ETL API             | `http://localhost:8000`  |
+| n8n                 | `http://localhost:5678`  |
+| MinIO Console       | `http://localhost:9001`  |
+| RabbitMQ Management | `http://localhost:15672` |
+| Jupyter Lab         | `http://localhost:8890`  |
+| Apache Superset     | `http://localhost:8088`  |
+| PostgreSQL          | `localhost:5432`         |
+
+---
+
+# Running the Pipeline Manually
+
+Execute all stages:
+
+```bash
+curl -X POST "http://localhost:8000/run"
+```
+
+For a specific date:
+
+```bash
+curl -X POST "http://localhost:8000/run?date=2026-05-12"
+```
+
+Individual stages can also be executed:
+
+```bash
+curl -X POST "http://localhost:8000/ingest"
+curl -X POST "http://localhost:8000/preprocess"
+curl -X POST "http://localhost:8000/analytics"
+```
+
+---
+
+# Validate Pipeline Outputs
+
+Run:
+
+```bash
+docker compose exec etl python src/validate_outputs.py
+```
+
+The validation process checks that the expected RAW, CLEAN, PROCESSED and CURATED files were generated correctly.
+
+---
+
+# Useful Docker Commands
+
+Check service status:
+
+```bash
+docker compose ps
+```
+
+Follow ETL logs:
+
+```bash
+docker compose logs -f etl
+```
+
+Follow n8n logs:
+
+```bash
+docker compose logs -f n8n
+```
+
+Follow RabbitMQ logs:
+
+```bash
+docker compose logs -f rabbitmq
+```
+
+Stop the infrastructure:
+
+```bash
+docker compose down
+```
+
+Remove containers and persistent volumes:
+
+```bash
+docker compose down -v
+```
+
+---
+
+# Technologies
+
+## Data Engineering
+
+* Python
+* Pandas
+* ETL pipelines
+* Data Lake architecture
+* Hive-style partitioning
+
+## Data Storage
+
+* MinIO
+* PostgreSQL
+* S3-compatible object storage
+
+## Workflow & Messaging
+
+* n8n
+* RabbitMQ
+
+## Analytics
+
+* Jupyter Lab
+* Apache Superset
+
+## Infrastructure
+
+* Docker
+* Docker Compose
+
+## Data Source
+
+* Open-Meteo Historical Weather API
+* Open-Meteo Air Quality API
+
+---
+
+# Key Concepts
+
+This project demonstrates concepts including:
+
+* Big Data infrastructure
+* Data engineering
+* ETL
+* Data Lakes
+* Layered data architectures
+* RAW / CLEAN / PROCESSED / CURATED pipelines
+* Object storage
+* Workflow orchestration
+* Event-driven architectures
+* Message brokers
+* Relational analytical databases
+* Data validation
+* SQL analytics
+* Business Intelligence
+* Containerized infrastructures
+
+---
+
+# Potential Extensions
+
+Possible future improvements include:
+
+* Apache Airflow orchestration
+* Apache Spark processing
+* Kafka-based event streaming
+* Additional environmental APIs
+* Historical trend analysis
+* Automated anomaly detection
+* Data quality monitoring
+* Alerting systems
+* Additional Madrid environmental variables
+* Cloud deployment
+* Infrastructure-as-Code
+* Automated Superset dashboard provisioning
+
+---
+
+# Academic Context
+
+This project was developed as part of a **Big Data Infrastructures** laboratory project.
+
+Its purpose is to demonstrate the design and deployment of an end-to-end data engineering architecture combining ingestion, storage, processing, orchestration, messaging, analytical databases, and visualization.
+
+---
+
+# License
+
+See the repository license for applicable terms.
+
+
+
+
+## Spanish Translation
+## Infraestructura Big Data ambiental para Madrid
 
 Infraestructura completa de datos ambientales para el Ayuntamiento de Madrid. Recoge datos horarios de Open-Meteo, los almacena en un Data Lake por capas (MinIO), los orquesta con n8n y RabbitMQ, los carga en PostgreSQL y los visualiza con Apache Superset.
 
